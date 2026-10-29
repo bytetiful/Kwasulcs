@@ -5,6 +5,8 @@
  * fetch any new messages since the last one the client already has.
  */
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/assignment_test.php';
+require_once __DIR__ . '/includes/online_quiz.php';
 require_login();
 // ensure_chat_tables() removed here — this endpoint is polled every 4s
 // from an open chat thread, so it was re-running ~11 CREATE/ALTER TABLE
@@ -32,6 +34,9 @@ try {
         $lecturerId = (int) $courseStmt->fetchColumn();
 
         $groupId = get_or_create_chat_group($courseId);
+        // Reconcile before selecting changed cards so an idle chat receives
+        // deadline closures in this same polling response.
+        assignment_test_close_overdue();
 
         $stmt = db()->prepare('
             SELECT m.*, u.full_name AS sender_name, u.role AS sender_role, u.google_picture AS sender_picture
@@ -58,8 +63,8 @@ try {
             }
         }
 
-        $out = array_map(function ($m) use ($lecturerId, $attachmentsByMsg) {
-            return [
+        $out = array_map(function ($m) use ($lecturerId, $attachmentsByMsg, $user) {
+            $row = [
                 'id'              => (int) $m['id'],
                 'sender_id'       => (int) $m['sender_id'],
                 'sender_name'     => $m['sender_name'],
@@ -74,6 +79,11 @@ try {
                 'deleted_at'      => $m['deleted_at'],
                 'attachments'     => $attachmentsByMsg[$m['id']] ?? [],
             ];
+            if (!empty($m['assignment_test_id'])) {
+                $row = array_merge($row, assignment_test_chat_card_bundle((int) $m['assignment_test_id'], $user));
+            }
+            if(!empty($m['online_quiz_id']))$row=array_merge($row,oq_chat_bundle((int)$m['online_quiz_id'],$user));
+            return $row;
         }, $messages);
 
         // Bump the read cursor since the user is actively viewing this thread.
@@ -92,17 +102,32 @@ try {
         // this, an edit/delete by the sender would never reach anyone who
         // already had the page open.
         $updStmt = db()->prepare('
-            SELECT id, content, edited_at, deleted_at FROM chat_messages
-            WHERE group_id = ? AND id <= ? AND (edited_at > ? OR deleted_at > ?)
-            ORDER BY id ASC LIMIT 100
+            SELECT m.id, m.content, m.edited_at, m.deleted_at, m.assignment_test_id
+            FROM chat_messages m
+            LEFT JOIN assignment_tests atx ON atx.id=m.assignment_test_id
+            LEFT JOIN assignment_test_submissions own_submission ON own_submission.assignment_test_id=atx.id AND own_submission.student_id=?
+            WHERE m.group_id = ? AND m.id <= ?
+              AND (m.edited_at > ? OR m.deleted_at > ? OR atx.updated_at >= ? OR own_submission.updated_at >= ? OR (atx.due_at >= ? AND atx.due_at <= NOW()))
+            ORDER BY m.id ASC LIMIT 100
         ');
-        $updStmt->execute([$groupId, $sinceId, $sinceTime, $sinceTime]);
-        $updates = array_map(fn($m) => [
+        $updStmt->execute([(int) $user['id'], $groupId, $sinceId, $sinceTime, $sinceTime, $sinceTime, $sinceTime, $sinceTime]);
+        $updates = array_map(function ($m) use ($user) {
+            $update = [
             'id'         => (int) $m['id'],
             'content'    => $m['content'],
             'edited_at'  => $m['edited_at'],
             'deleted_at' => $m['deleted_at'],
-        ], $updStmt->fetchAll());
+            ];
+            return !empty($m['assignment_test_id'])
+                ? array_merge($update, assignment_test_chat_card_bundle((int) $m['assignment_test_id'], $user))
+                : $update;
+        }, $updStmt->fetchAll());
+
+        // Quiz cards are live references: refresh clock and own-attempt state even
+        // without a message edit. Separate query avoids starving ordinary updates.
+        $quizCards=db()->prepare('SELECT id,online_quiz_id FROM chat_messages WHERE group_id=? AND id<=? AND online_quiz_id IS NOT NULL ORDER BY id');
+        $quizCards->execute([$groupId,$sinceId]);
+        foreach($quizCards->fetchAll() as $card)$updates[]=array_merge(['id'=>(int)$card['id']],oq_chat_bundle((int)$card['online_quiz_id'],$user));
 
         echo json_encode(['messages' => $out, 'updates' => $updates, 'read_upto' => $readUpto, 'server_time' => date('Y-m-d H:i:s')]);
         exit();

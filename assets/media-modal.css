@@ -1,0 +1,97 @@
+/* ── Media modals (video player / PDF preview / "view all" lists) ────────── */
+.media-modal-overlay:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 500;
+    background: rgba(15, 23, 42, .6);
+    backdrop-filter: blur(3px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    animation: course-modal-fade .2s ease;
+}
+
+@keyframes course-modal-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.media-modal {
+    background: var(--panel);
+    border-radius: 22px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .35);
+    width: 100%;
+    max-width: 860px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: course-modal-scale .22s cubic-bezier(.2, .9, .3, 1.1);
+}
+
+@keyframes course-modal-scale {
+    from { transform: scale(.94); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+}
+
+.media-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.media-modal-head strong {
+    font-size: 14.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.media-modal-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.media-modal-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: none;
+    background: var(--soft);
+    color: var(--text);
+    cursor: pointer;
+    transition: background .15s;
+}
+
+.media-modal-btn:hover {
+    background: var(--line);
+}
+
+/* Video player */
+.video-modal-body {
+    background: #000;
+    aspect-ratio: 16 / 9;
+}
+
+.video-modal-body iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .media-modal-overlay:not([hidden]),
+    .media-modal {
+        animation: none;
+    }
+}

@@ -18,11 +18,11 @@ if (!enrolled_or_staff_access($courseId, $user) || $user['role'] === 'student') 
 }
 
 if ($title === '' || $body === '') {
-    header('Location: course.php?id=' . $courseId . '&error=announcement_incomplete');
+    header('Location: course?id=' . $courseId . '&error=announcement_incomplete');
     exit();
 }
 
 db()->prepare('INSERT INTO course_announcements (course_id, title, body, created_by) VALUES (?, ?, ?, ?)')
     ->execute([$courseId, $title, $body, $user['id']]);
 
-header('Location: course.php?id=' . $courseId . '&announced=1');
+header('Location: course?id=' . $courseId . '&announced=1');

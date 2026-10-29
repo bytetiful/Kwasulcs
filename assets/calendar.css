@@ -1226,6 +1226,8 @@
 .dash-notif-row--new {
     background: #f0fdf4;
 }
+[data-theme="dark"] .dash-notif-row { border-top-color:var(--line); color:var(--text); }
+[data-theme="dark"] .dash-notif-row--new { background:#163528; }
 
 .dash-notif-icon {
     display: inline-flex;
@@ -1275,6 +1277,9 @@
     background: #f0f9ff;
 }
 
+.notif-panel .notif-row--read .notif-icon { background:#f1f5f9; color:#64748b; }
+.notif-panel .notif-row--read .notif-message { color:#475569; }
+
 .notif-icon {
     width: 40px;
     height: 40px;
@@ -1317,6 +1322,25 @@
     gap: 6px;
     flex-shrink: 0;
 }
+
+/* Notification cards use the same dark surface and text system as the panel. */
+[data-theme="dark"] .notif-panel .notif-row {
+    border-top-color: var(--line);
+    color: var(--text);
+}
+[data-theme="dark"] .notif-panel .notif-row--unread {
+    background-color: #243147;
+}
+[data-theme="dark"] .notif-panel .notif-row--unread:hover {
+    background-color: #2b3b54;
+}
+[data-theme="dark"] .notif-panel .notif-message { color: var(--text); }
+[data-theme="dark"] .notif-panel .notif-row--read .notif-message { color: #c5d2e4; }
+[data-theme="dark"] .notif-panel .notif-meta,
+[data-theme="dark"] .notif-panel .notif-time {
+    color: #b9c8df;
+}
+[data-theme="dark"] .notif-panel .notif-row--read .notif-icon { background: #334155; color: #dbeafe; }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 860px) {

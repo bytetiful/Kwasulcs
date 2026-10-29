@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/routes.php';
 require_login();
 
 $user = current_user();
@@ -9,7 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_read'])) {
     $nid = (int)$_POST['notif_id'];
     db()->prepare('UPDATE web_notifications SET is_read = 1 WHERE id = ? AND user_id = ?')
         ->execute([$nid, $user['id']]);
-    header('Location: notifications.php');
+    header('Location: notifications');
     exit();
 }
 
@@ -17,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_read'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_all_read'])) {
     db()->prepare('UPDATE web_notifications SET is_read = 1 WHERE user_id = ?')
         ->execute([$user['id']]);
-    header('Location: notifications.php');
+    header('Location: notifications');
     exit();
 }
 
@@ -25,7 +26,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mark_all_read'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clear_read'])) {
     db()->prepare('DELETE FROM web_notifications WHERE user_id = ? AND is_read = 1')
         ->execute([$user['id']]);
-    header('Location: notifications.php');
+    header('Location: notifications');
     exit();
 }
 
@@ -52,7 +53,26 @@ $typeColors = [
     'test'     => '#ea580c',
     'personal' => '#059669',
     'general'  => '#0891b2',
+    'published' => '#078b2e',
+    'due_reminder' => '#ea580c',
+    'closed' => '#dc2626',
+    'submission_receipt' => '#2563eb',
+    'marked' => '#7c3aed',
+    'returned' => '#ca8a04',
 ];
+
+function notification_display_type(array $notification): string
+{
+    return !empty($notification['assignment_test_id'])
+        ? (string) ($notification['notification_type'] ?: 'assignment_test')
+        : (string) ($notification['event_type'] ?: 'general');
+}
+
+function notification_action_url(array $notification): ?string
+{
+    $url = lcs_navigation_url((string) ($notification['action_url'] ?? ''));
+    return preg_match('/^(?:assignment_test|online_quiz|online_quiz_result)\?id=\d+$/', $url) ? $url : null;
+}
 
 function time_ago(string $ts): string
 {
@@ -63,6 +83,8 @@ function time_ago(string $ts): string
     if ($diff < 86400 * 7) return (int)($diff / 86400) . ' day(s) ago';
     return date('d M Y', strtotime($ts));
 }
+require_once __DIR__ . '/includes/pwa.php';
+pwa_mark_cacheable_page((int) $user['id']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -78,6 +100,7 @@ function time_ago(string $ts): string
 
 <body class="app-body">
     <?php include __DIR__ . '/partials/nav.php'; ?>
+    <section class="app-hero">
     <?php include __DIR__ . '/partials/appheader.php'; ?>
 
     <header class="topbar">
@@ -104,9 +127,10 @@ function time_ago(string $ts): string
                     </button>
                 </form>
             <?php endif; ?>
-            <a class="btn secondary btn-go-dashboard" href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
+            <a class="btn secondary btn-go-dashboard" href="dashboard"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
         </div>
     </header>
+    </section>
 
     <main class="page">
 
@@ -114,8 +138,8 @@ function time_ago(string $ts): string
             <div class="panel" style="padding:40px;text-align:center;">
                 <div style="font-size:48px;margin-bottom:12px;"><i class="bi bi-bell-slash"></i></div>
                 <h2 style="color:#64748b;font-weight:600;">No notifications yet</h2>
-                <p class="muted">When calendar event reminders fire, they'll appear here.</p>
-                <a class="btn primary" href="calendar.php" style="margin-top:12px;display:inline-flex;">
+                <p class="muted">Calendar and Assignment/Test updates will appear here.</p>
+                <a class="btn primary" href="calendar" style="margin-top:12px;display:inline-flex;">
                     <i class="bi bi-calendar3 icon"></i> Go to Calendar
                 </a>
             </div>
@@ -129,11 +153,13 @@ function time_ago(string $ts): string
                     Unread
                 </h2>
                 <?php foreach ($unread as $n):
-                    $color = $typeColors[$n['event_type'] ?? 'general'] ?? '#64748b';
+                    $displayType = notification_display_type($n);
+                    $actionUrl = notification_action_url($n);
+                    $color = $typeColors[$displayType] ?? '#64748b';
                 ?>
                     <div class="notif-row notif-row--unread" style="border-left-color:<?php echo $color; ?>;">
                         <div class="notif-icon" style="background:<?php echo $color; ?>18;color:<?php echo $color; ?>;">
-                            <?php echo match ($n['event_type'] ?? '') {
+                            <?php echo !empty($n['assignment_test_id']) ? '<i class="bi bi-file-earmark-check-fill"></i>' : match ($n['event_type'] ?? '') {
                                 'exam'     => '<i class="bi bi-clipboard-fill"></i>',
                                 'test'     => '<i class="bi bi-pencil-fill"></i>',
                                 'lecture'  => '<i class="bi bi-mortarboard-fill"></i>',
@@ -154,12 +180,13 @@ function time_ago(string $ts): string
                                 </div>
                             <?php endif; ?>
                             <div class="notif-time"><?php echo time_ago($n['created_at']); ?></div>
+                            <?php if ($actionUrl): ?><a class="btn tiny secondary" href="<?php echo h($actionUrl); ?>" style="margin-top:8px;">Open Assignment/Test</a><?php endif; ?>
                         </div>
                         <div class="notif-actions">
-                            <?php if ($n['event_type']): ?>
+                            <?php if ($displayType): ?>
                                 <span class="badge ev-badge"
                                     style="background:<?php echo $color; ?>22;color:<?php echo $color; ?>;border:1px solid <?php echo $color; ?>55;">
-                                    <?php echo ucfirst($n['event_type']); ?>
+                                    <?php echo h(ucwords(str_replace('_', ' ', $displayType))); ?>
                                 </span>
                             <?php endif; ?>
                             <form method="post" style="display:inline;">
@@ -179,14 +206,16 @@ function time_ago(string $ts): string
             <div class="panel notif-panel" style="margin-top:16px;">
                 <h2 class="notif-section-head" style="color:#94a3b8;">Earlier</h2>
                 <?php foreach ($read as $n):
-                    $color = $typeColors[$n['event_type'] ?? 'general'] ?? '#64748b';
+                    $displayType = notification_display_type($n);
+                    $actionUrl = notification_action_url($n);
+                    $color = $typeColors[$displayType] ?? '#64748b';
                 ?>
-                    <div class="notif-row" style="border-left-color:<?php echo $color; ?>55;opacity:.75;">
-                        <div class="notif-icon" style="background:#f1f5f9;color:#94a3b8;">
+                    <div class="notif-row notif-row--read" style="border-left-color:<?php echo $color; ?>55;">
+                        <div class="notif-icon">
                             <i class="bi bi-bell-slash"></i>
                         </div>
                         <div class="notif-content">
-                            <div class="notif-message" style="color:#64748b;"><?php echo h($n['message']); ?></div>
+                            <div class="notif-message"><?php echo h($n['message']); ?></div>
                             <?php if ($n['event_title'] && $n['start_datetime']): ?>
                                 <div class="notif-meta">
                                     <?php echo h($n['event_title']); ?>
@@ -194,11 +223,12 @@ function time_ago(string $ts): string
                                 </div>
                             <?php endif; ?>
                             <div class="notif-time"><?php echo time_ago($n['created_at']); ?></div>
+                            <?php if ($actionUrl): ?><a class="btn tiny secondary" href="<?php echo h($actionUrl); ?>" style="margin-top:8px;">Open Assignment/Test</a><?php endif; ?>
                         </div>
-                        <?php if ($n['event_type']): ?>
+                        <?php if ($displayType): ?>
                             <span class="badge ev-badge"
                                 style="background:#f1f5f9;color:#94a3b8;border:1px solid #e2e8f0;">
-                                <?php echo ucfirst($n['event_type']); ?>
+                                <?php echo h(ucwords(str_replace('_', ' ', $displayType))); ?>
                             </span>
                         <?php endif; ?>
                     </div>

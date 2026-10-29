@@ -4,7 +4,7 @@ require_login();
 
 $user = current_user();
 if ($_SERVER['REQUEST_METHOD'] !== 'POST' || $user['role'] !== 'student') {
-    header('Location: dashboard.php');
+    header('Location: dashboard');
     exit();
 }
 
@@ -24,5 +24,5 @@ if ($videoId > 0 && $courseId > 0 && is_enrolled((int)$user['id'], $courseId)) {
     }
 }
 
-header('Location: course.php?id=' . $courseId);
+header('Location: course?id=' . $courseId);
 exit();

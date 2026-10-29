@@ -4,6 +4,7 @@
 // via chat_conversations_for(), just rendered smaller. Requires $user in
 // scope; $__chatActiveType ('group'|'dm'|'ai') and $__chatActiveId set by
 // the including page so the open thread can be highlighted.
+require_once dirname(__DIR__) . '/includes/assignment_test.php';
 $__chatData   = chat_conversations_for($user);
 $__chatActiveType = $__chatActiveType ?? null;
 $__chatActiveId   = $__chatActiveId ?? 0;
@@ -11,21 +12,28 @@ $__chatActiveId   = $__chatActiveId ?? 0;
 <aside class="chat-conversations">
     <div class="chat-conversations-head">
         <h2>Conversations</h2>
-        <a class="chat-icon-btn" href="chat.php" title="Chat home"><i class="bi bi-house-door"></i></a>
+        <a class="chat-icon-btn" href="chat" title="Assessment/Chat home"><i class="bi bi-house-door"></i></a>
     </div>
     <div class="chat-conversations-list">
-        <a class="chat-conv-row<?php echo $__chatActiveType === 'ai' ? ' active' : ''; ?>" href="chat_ai.php">
+        <a class="chat-conv-row<?php echo $__chatActiveType === 'ai' ? ' active' : ''; ?>" href="chat_ai">
             <div class="chat-avatar chat-avatar--ai"><i class="bi bi-robot"></i></div>
             <div class="chat-conv-info">
                 <strong>AI Assistant</strong>
                 <p class="muted">Ask anything</p>
             </div>
         </a>
+        <a class="chat-conv-row<?php echo $__chatActiveType === 'assignment_test' ? ' active' : ''; ?>" href="assignment_tests">
+            <div class="chat-avatar chat-avatar--assignment"><i class="bi bi-file-earmark-text"></i></div>
+            <div class="chat-conv-info">
+                <strong>Assignment/Test</strong>
+                <p class="muted">Course work</p>
+            </div>
+        </a>
         <?php foreach ($__chatData['groups'] as $g):
             $isActive = $__chatActiveType === 'group' && $__chatActiveId === $g['course_id'];
         ?>
             <a class="chat-conv-row<?php echo $isActive ? ' active' : ''; ?><?php echo $g['unread'] > 0 ? ' has-unread' : ''; ?>"
-                href="chat_group.php?course_id=<?php echo (int) $g['course_id']; ?>">
+                href="chat_group?course_id=<?php echo (int) $g['course_id']; ?>">
                 <div class="chat-avatar" style="background:<?php echo user_color((int) $g['course_id']); ?>;color:#fff;"><?php echo h(substr($g['code'], 0, 2)); ?></div>
                 <div class="chat-conv-info">
                     <strong><?php echo h($g['code']); ?></strong>
@@ -43,7 +51,7 @@ $__chatActiveId   = $__chatActiveId ?? 0;
             $isActive = $__chatActiveType === 'dm' && $__chatActiveId === $d['thread_id'];
         ?>
             <a class="chat-conv-row<?php echo $isActive ? ' active' : ''; ?><?php echo $d['unread'] > 0 ? ' has-unread' : ''; ?>"
-                href="chat_dm.php?thread_id=<?php echo (int) $d['thread_id']; ?>">
+                href="chat_dm?thread_id=<?php echo (int) $d['thread_id']; ?>">
                 <div class="chat-avatar" style="background:<?php echo user_color((int) $d['other_id']); ?>;color:#fff;"><?php echo avatar_inner_html($d['name'], $d['picture'] ?? null); ?></div>
                 <div class="chat-conv-info">
                     <strong><?php echo h($d['name']); ?></strong>
@@ -58,5 +66,5 @@ $__chatActiveId   = $__chatActiveId ?? 0;
             </a>
         <?php endforeach; ?>
     </div>
-    <a class="btn secondary chat-new-dm-btn" href="chat.php#start-chat"><i class="bi bi-plus-lg"></i> New Direct Message</a>
+    <a class="btn secondary chat-new-dm-btn" href="chat#start-chat"><i class="bi bi-plus-lg"></i> New Direct Message</a>
 </aside>

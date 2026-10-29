@@ -1,7 +1,7 @@
 <?php
 // Temporary error catching — remove after debugging
 ini_set('display_errors', 0);
-register_shutdown_function(function() {
+register_shutdown_function(function () {
     $err = error_get_last();
     if ($err && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
         if (!headers_sent()) header('Content-Type: application/json');
@@ -20,6 +20,7 @@ register_shutdown_function(function() {
  *   { "action": "delete_session","session_id": N }
  */
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/ai_chat_usage.php'; // Phase 3C — isolated usage-aware AI caller, see its own docblock
 require_login();
 
 header('Content-Type: application/json');
@@ -212,9 +213,19 @@ if ($courseId > 0) {
     $courseStmt = db()->prepare('SELECT c.*, u.full_name AS lecturer_name FROM courses c JOIN users u ON u.id = c.lecturer_id WHERE c.id = ?');
     $courseStmt->execute([$courseId]);
     $course = $courseStmt->fetch();
-    if (!$course) {
-        http_response_code(404);
-        echo json_encode(['error' => 'Course not found']);
+    // Nonexistent course and "exists but you're not authorized" are
+    // deliberately given the SAME response (never distinguished) — same
+    // reasoning as ai_quiz.php's equivalent check (Phase 2C): distinguishing
+    // them would let a request enumerate which course_ids are valid.
+    // The chatbot is an AI-powered STUDENT feature and specifically
+    // requires REGISTRATION (registered_or_staff_ai_access()), not just
+    // course authorization — an admin who is merely department-authorized
+    // but not personally enrolled is deliberately still rejected here,
+    // exactly like an unregistered student would be. This runs BEFORE any
+    // topic/document/video/transcript retrieval below, and before any AI call.
+    if (!$course || !registered_or_staff_ai_access($courseId, $user)) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Forbidden']);
         exit();
     }
 }
@@ -245,12 +256,81 @@ $msgLower = strtolower($message);
 // loading / transcript fetching on those matched topics. Unmatched topics
 // still get listed by title so the AI knows they exist, just without their
 // full content — near-zero extra cost.
-$STOPWORDS = ['a','an','and','are','as','at','be','by','for','from','has','he','in','is','it',
-    'its','of','on','that','the','to','was','were','will','with','this','what','when','where',
-    'who','how','why','does','do','did','can','could','would','should','please','i','you','your',
-    'my','me','we','our','us','they','them','their','about','into','than','then','there','here',
-    'which','or','but','not','no','yes','ok','okay','hello','hi','hey','thanks','thank','course',
-    'week','topic'];
+$STOPWORDS = [
+    'a',
+    'an',
+    'and',
+    'are',
+    'as',
+    'at',
+    'be',
+    'by',
+    'for',
+    'from',
+    'has',
+    'he',
+    'in',
+    'is',
+    'it',
+    'its',
+    'of',
+    'on',
+    'that',
+    'the',
+    'to',
+    'was',
+    'were',
+    'will',
+    'with',
+    'this',
+    'what',
+    'when',
+    'where',
+    'who',
+    'how',
+    'why',
+    'does',
+    'do',
+    'did',
+    'can',
+    'could',
+    'would',
+    'should',
+    'please',
+    'i',
+    'you',
+    'your',
+    'my',
+    'me',
+    'we',
+    'our',
+    'us',
+    'they',
+    'them',
+    'their',
+    'about',
+    'into',
+    'than',
+    'then',
+    'there',
+    'here',
+    'which',
+    'or',
+    'but',
+    'not',
+    'no',
+    'yes',
+    'ok',
+    'okay',
+    'hello',
+    'hi',
+    'hey',
+    'thanks',
+    'thank',
+    'course',
+    'week',
+    'topic'
+];
 
 function extract_keywords(string $text): array
 {
@@ -273,11 +353,24 @@ function score_relevance(array $questionKeywords, string $candidateText): int
 
 // Broad/course-wide questions should see every topic's title even without a
 // keyword match (e.g. "what topics does this course cover?").
-$broadKeywords = ['course cover', 'all topics', 'whole course', 'entire course', 'every week',
-    'course structure', 'course overview', 'what topics', 'list the topics', 'course outline'];
+$broadKeywords = [
+    'course cover',
+    'all topics',
+    'whole course',
+    'entire course',
+    'every week',
+    'course structure',
+    'course overview',
+    'what topics',
+    'list the topics',
+    'course outline'
+];
 $isBroadQuestion = false;
 foreach ($broadKeywords as $kw) {
-    if (str_contains($msgLower, $kw)) { $isBroadQuestion = true; break; }
+    if (str_contains($msgLower, $kw)) {
+        $isBroadQuestion = true;
+        break;
+    }
 }
 
 $questionKeywords = extract_keywords($message);
@@ -316,7 +409,10 @@ foreach ($topics as $topic) {
     $score = score_relevance($questionKeywords, $titleBlob);
 
     $topicMeta[] = [
-        'topic' => $topic, 'docs' => $docRows, 'vids' => $vidRows, 'score' => $score,
+        'topic' => $topic,
+        'docs' => $docRows,
+        'vids' => $vidRows,
+        'score' => $score,
     ];
 }
 
@@ -357,27 +453,128 @@ if ($maxScore > 0) {
     $relevantTopicIds = [];
 }
 
+// ── Video-reference relevance signal (chatbot follow-up fix) ────────────────
+// The title-keyword filter above has a confirmed failure mode specific to
+// video: a natural question like "what did the lecturer mention in the
+// video?" shares no words with a title like "Week 1 Lecture Recording", so
+// it scores 0 and the transcript is never even attempted — reproduced live
+// against this exact course/question shape before this fix. This is a
+// SEPARATE signal from document relevance (deliberately not merged into
+// $relevantTopicIds, which stays exactly as it was — document behavior is
+// unchanged) that recognizes an explicit natural-language reference to
+// video/lecture content and, ONLY when a single video can be identified
+// without guessing, allows that one video's transcript through even when
+// title overlap is zero. Never loads every video "just in case".
+$videoReferencePhrases = [
+    'the video',
+    'that video',
+    'in the video',
+    'the lecture recording',
+    'the lecture',
+    'the recording',
+    'from the recording',
+    'what did the lecturer say',
+    'what did the lecturer mention',
+    'according to the video',
+    'according to the lecture',
+    'in the lecture',
+    'what was mentioned in the recording',
+];
+$isVideoReferenceQuestion = false;
+foreach ($videoReferencePhrases as $phrase) {
+    if (str_contains($msgLower, $phrase)) {
+        $isVideoReferenceQuestion = true;
+        break;
+    }
+}
+
+$videoRelevantTopicIds = [];
+if ($isVideoReferenceQuestion) {
+    // Candidate pool = every video already loaded for this course (all of
+    // $topicMeta, not just $relevantTopicIds) — the "current course context"
+    // the fix is scoped to, per the explicit instruction not to search
+    // beyond what's already fetched.
+    $allCourseVideos = [];
+    foreach ($topicMeta as $tm) {
+        foreach ($tm['vids'] as $vid) {
+            $allCourseVideos[] = ['topic_id' => $tm['topic']['id'], 'vid' => $vid];
+        }
+    }
+    if (count($allCourseVideos) === 1) {
+        // Exactly one video exists in the whole course — an explicit "the
+        // video" reference is unambiguous, no title match needed.
+        $videoRelevantTopicIds[] = $allCourseVideos[0]['topic_id'];
+    } elseif (count($allCourseVideos) > 1) {
+        // Multiple candidates — only select if EXACTLY one video's own
+        // title is distinguishable via the existing score_relevance()
+        // function (reused unmodified). A tie (0 or 2+ matches) means
+        // there's genuinely not enough information to pick one — the
+        // existing fallback applies and nothing is guessed.
+        $titleMatches = [];
+        foreach ($allCourseVideos as $candidate) {
+            if (score_relevance($questionKeywords, $candidate['vid']['title']) > 0) {
+                $titleMatches[] = $candidate;
+            }
+        }
+        if (count($titleMatches) === 1) {
+            $videoRelevantTopicIds[] = $titleMatches[0]['topic_id'];
+        }
+    }
+}
+
 // True once real document/transcript text (not just a title) has actually
 // been appended to $context for at least one topic this request — drives
 // the conditional system-prompt wording below (Task 20 fix b): the model
 // must never be told it "has access to the real documents above" when
 // nothing real actually made it into the context.
 $hasRealContent = false;
+// Separately tracks whether a VIDEO TRANSCRIPT specifically was appended —
+// distinct from $hasRealContent (which is also true for document-only
+// content) so the prompt can tell the model about transcript access only
+// when a transcript was genuinely supplied, never claiming it otherwise.
+$hasTranscriptContent = false;
 
 if ($topics) {
     $context .= "WEEKLY TOPICS:\n";
     foreach ($topicMeta as $tm) {
         $topic   = $tm['topic'];
         $isFull  = in_array($topic['id'], $relevantTopicIds, true);
+        // Document relevance ($isFull, above) is completely unchanged —
+        // this is the separate, additive video signal computed above.
+        $isVideoOnlyRelevant = !$isFull && in_array($topic['id'], $videoRelevantTopicIds, true);
         $context .= "\nWeek {$topic['week_number']}: {$topic['title']}\n";
 
         if (!$isFull) {
-            // Metadata-only: just list what exists, no extraction cost at all.
+            // Metadata-only for documents either way. Videos get the SAME
+            // title-only treatment UNLESS this specific topic's video was
+            // identified as the unambiguous target of an explicit video
+            // reference above — in that one case, its transcript is fetched
+            // even though the topic's documents stay title-only (the two
+            // signals are independent, per the explicit instruction).
             foreach ($tm['docs'] as $doc) {
                 $context .= "  [Document available: {$doc['title']}]\n";
             }
             foreach ($tm['vids'] as $vid) {
-                $context .= "  [Video available: {$vid['title']}]\n";
+                if (!$isVideoOnlyRelevant || empty($vid['original_url'])) {
+                    // Unchanged existing behavior — plain title-only mention.
+                    $context .= "  [Video available: {$vid['title']}]\n";
+                    continue;
+                }
+                $videoId = youtube_id($vid['original_url']);
+                $transcript = $videoId ? fetch_youtube_transcript($videoId) : '';
+                if ($transcript) {
+                    $context .= "  [Video: {$vid['title']}]\n";
+                    $context .= "  [Video Transcript: {$vid['title']}]\n";
+                    $context .= substr($transcript, 0, 3000) . (strlen($transcript) > 3000 ? "\n...(transcript continues)" : '') . "\n";
+                    $hasRealContent = true;
+                    $hasTranscriptContent = true;
+                } else {
+                    // Identified as the target video, but no transcript could
+                    // actually be retrieved — fall back to the same honest
+                    // title-only mention rather than silently claiming
+                    // nothing changed or pretending a transcript was found.
+                    $context .= "  [Video available: {$vid['title']}]\n";
+                }
             }
             continue;
         }
@@ -422,6 +619,7 @@ if ($topics) {
                         // Limit to 3000 chars to stay within token budget
                         $context .= substr($transcript, 0, 3000) . (strlen($transcript) > 3000 ? "\n...(transcript continues)" : '') . "\n";
                         $hasRealContent = true;
+                        $hasTranscriptContent = true;
                     }
                 }
             }
@@ -474,13 +672,21 @@ if ($sections) {
 // refusal, depending on how the model resolved that contradiction. Now
 // honest either way: real access is only claimed when $hasRealContent is
 // actually true for this request.
-$accessNote = $hasRealContent
-    ? "Answer questions about the actual course content — you have access to the real documents above"
-    : "You do NOT have the full text of any document loaded for this question — you can see topic and document TITLES only (marked \"available\" above), not their content. Do not invent or guess at what a document/video likely contains based on its title alone. If the student's question seems to be about specific content, ask a brief clarifying question about which topic/week they mean, or answer generally from your own knowledge if that's more helpful — be upfront either way, don't pretend to have read something you haven't";
+// Chatbot follow-up fix: a third, more specific state — when a video
+// transcript was genuinely supplied, say so explicitly (never let the model
+// claim "I can't access the video" when its actual spoken content is right
+// there in the context above), without over-claiming when only documents
+// (no transcript) were loaded, and without ever claiming transcript access
+// when $hasTranscriptContent is false.
+$accessNote = match (true) {
+    $hasTranscriptContent => "Answer questions about the actual course content — you have access to the real course documents AND/OR video transcripts provided above (look for \"[Video Transcript: ...]\" sections). If a video's transcript is shown above, you DO have access to that video's actual spoken content — never claim you cannot access a video whose transcript is shown above.",
+    $hasRealContent       => "Answer questions about the actual course content — you have access to the real documents above",
+    default                => "You do NOT have the full text of any document or video transcript loaded for this question — you can see topic, document, and video TITLES only (marked \"available\" above), not their content. Do not invent or guess at what a document/video likely contains based on its title alone. If the student's question seems to be about specific content, ask a brief clarifying question about which topic/week they mean, or answer generally from your own knowledge if that's more helpful — be upfront either way, don't pretend to have read something you haven't",
+};
 
 $systemPrompt = $course
-    ? "You are an AI study assistant for the KWASU Lecture Capture System (LCS) at Kwara State University.\n\nYou are helping students with the following course:\n\n{$context}\n\nYour role:\n- {$accessNote}\n- If the student attaches an image or document, analyse it carefully and answer in relation to the course\n- Explain concepts, summarize topics, and help students understand the material\n- Reference specific weeks or documents when relevant\n- Be encouraging, clear, and appropriately detailed\n- Stay focused on this course; politely decline unrelated questions\n\nStudent: {$user['full_name']} ({$user['role']})"
-    : "You are a general AI study assistant for KWASU Lecture Capture System (LCS) students at Kwara State University.\n\nYou are not scoped to any single course — help with general study questions, explain concepts, and if the student attaches an image or document, analyse it and answer helpfully.\nBe encouraging, clear, and appropriately detailed.\n\nStudent: {$user['full_name']} ({$user['role']})";
+    ? "You are an AI study assistant for the KWASU Lecture Capturing System (LCS) at Kwara State University.\n\nYou are helping students with the following course:\n\n{$context}\n\nYour role:\n- {$accessNote}\n- If the student attaches an image or document, analyse it carefully and answer in relation to the course\n- Explain concepts, summarize topics, and help students understand the material\n- Reference specific weeks or documents when relevant\n- Be encouraging, clear, and appropriately detailed\n- Stay focused on this course; politely decline unrelated questions\n\nStudent: {$user['full_name']} ({$user['role']})"
+    : "You are a general AI study assistant for KWASU Lecture Capturing System (LCS) students at Kwara State University.\n\nYou are not scoped to any single course — help with general study questions, explain concepts, and if the student attaches an image or document, analyse it and answer helpfully.\nBe encouraging, clear, and appropriately detailed.\n\nStudent: {$user['full_name']} ({$user['role']})";
 
 // Build messages array including history
 $apiMessages = [];
@@ -556,8 +762,15 @@ $apiMessages[] = [
 ];
 
 // ── Call AI provider ──────────────────────────────────────────────────────────
+// Phase 3C: call_ai_api_with_usage() (ai_chat_usage.php) replaces the
+// plain-string call_ai_api() — behavior, prompt, and error contract are
+// identical; the only difference is that provider-reported usage
+// (tokens/duration) is now captured internally (logged via
+// log_ai_chat_usage(), never sent to the client — see $reply below, which
+// is exactly what was echoed before this phase).
 try {
-    $reply = call_ai_api($systemPrompt, $apiMessages, 1024, null, 60);
+    $aiResult = call_ai_api_with_usage($systemPrompt, $apiMessages, 1024, null, 60);
+    $reply    = $aiResult['text'];
 } catch (\Throwable $e) {
     http_response_code(500);
     echo json_encode(['error' => $e->getMessage()]);

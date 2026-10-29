@@ -62,6 +62,8 @@ if ($msgIds) {
 $readUpto = chat_dm_read_upto($threadId, (int) $thread['user_a_id'], (int) $thread['user_b_id'], (int) $user['id']);
 $__chatActiveType = 'dm';
 $__chatActiveId   = $threadId;
+require_once __DIR__ . '/includes/pwa.php';
+pwa_mark_cacheable_page((int) $user['id']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -75,7 +77,7 @@ $__chatActiveId   = $threadId;
     <?php include __DIR__ . '/partials/appheader.php'; ?>
 
     <div class="chat-thread-header">
-        <a class="chat-icon-btn" href="chat.php" aria-label="Back to Chat" title="Back to Chat"><i class="bi bi-arrow-left"></i></a>
+        <a class="chat-icon-btn" href="chat" aria-label="Back to Assessment/Chat" title="Back to Assessment/Chat"><i class="bi bi-arrow-left"></i></a>
         <div class="chat-avatar chat-thread-avatar" style="background:<?php echo $otherColor; ?>;color:#fff;"><?php echo $otherAvatarHtml; ?></div>
         <div class="chat-thread-info">
             <strong><?php echo h($otherName); ?></strong>

@@ -1,5 +1,6 @@
 <?php
-require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/reminders.php';
+require_once __DIR__ . '/includes/routes.php';
 require_login();
 
 $user    = current_user();
@@ -8,7 +9,7 @@ $isStaff = in_array($role, ['admin', 'lecturer'], true);
 
 // Only accept POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    header('Location: calendar.php');
+    header('Location: calendar');
     exit();
 }
 
@@ -17,9 +18,7 @@ $rawRedirect = $_POST['redirect'] ?? '';
 $redirect    = html_entity_decode($rawRedirect, ENT_QUOTES, 'UTF-8');
 $redirect    = urldecode($redirect);
 // Only allow redirecting back to calendar pages for security
-if (!$redirect || !preg_match('#^calendar\.php#', $redirect)) {
-    $redirect = 'calendar.php';
-}
+$redirect = lcs_calendar_return_url($redirect);
 
 function flash_and_redirect(string $key, string $msg, string $url): void
 {
@@ -105,6 +104,10 @@ try {
     }
     $recurrEndSQL = ($isRecurring && $recurrEnd !== '') ? $recurrEnd : null;
 
+    if ($remindMins < 0 || $remindMins > 10080) throw new RuntimeException('Reminder offset must be between 0 and 10080 minutes.');
+    if ($eventId > 0) reminder_event_lock($eventId);
+    db()->beginTransaction();
+
     // ── Insert or update ──────────────────────────────────────────────────────
     if ($eventId > 0) {
         // Edit: check ownership / permission
@@ -114,6 +117,9 @@ try {
 
         if (!$existing) {
             throw new RuntimeException('Event not found.');
+        }
+        if (!empty($existing['assignment_test_id']) || !empty($existing['online_quiz_id'])) {
+            throw new RuntimeException('Manage this deadline from its Assignment/Test page.');
         }
 
         // The event's own creator can always edit it; beyond that, staff can
@@ -153,8 +159,9 @@ try {
             $eventId,
         ]);
 
-        // Reschedule notification
-        reschedule_notification($eventId, $startTS, $remindMins, (int) $user['id'], $notifyEmail, $notifyWeb);
+        reminder_sync_event($eventId);
+        db()->commit();
+        reminder_event_unlock($eventId);
 
         // Task 6 — a fresh, immediate "Event Updated" notice, separate from
         // the scheduled reminder rescheduled just above. Built from the
@@ -205,21 +212,14 @@ try {
         ]);
         $newId = (int) db()->lastInsertId();
 
-        // Schedule web + email notification
-        schedule_notification(
-            $newId,
-            $startTS,
-            $remindMins,
-            (int) $user['id'],
-            $scope,
-            $courseId,
-            $notifyEmail,
-            $notifyWeb
-        );
+        reminder_sync_event($newId);
+        db()->commit();
 
         flash_and_redirect('cal_flash', 'Event created successfully.', $redirect);
     }
 } catch (Throwable $e) {
+    if (db()->inTransaction()) db()->rollBack();
+    if (!empty($eventId)) reminder_event_unlock($eventId);
     flash_and_redirect('cal_error', $e->getMessage(), $redirect);
 }
 
@@ -230,219 +230,13 @@ try {
  */
 function collect_audience(int $creatorId, string $scope, ?int $courseId): array
 {
-    if ($scope === 'personal') {
-        return [$creatorId];
-    }
-    if ($scope === 'course' && $courseId) {
-        $s = db()->prepare('SELECT student_id FROM enrollments WHERE course_id = ?');
-        $s->execute([$courseId]);
-        $ids = array_map('intval', $s->fetchAll(PDO::FETCH_COLUMN));
-        $l = db()->prepare('SELECT lecturer_id FROM courses WHERE id = ?');
-        $l->execute([$courseId]);
-        $lid = (int) $l->fetchColumn();
-        if ($lid) $ids[] = $lid;
-        $ids[] = $creatorId;
-        return array_unique($ids);
-    }
-    if ($scope === 'global') {
-        // Department-wide broadcast, NOT literally every user in the system
-        // (Task 19 Part B) — "global" predates department support and used
-        // to mean "everyone", but that let one department's admin notify
-        // every other department's users, which is exactly the cross-
-        // department authority this task closes. Scoped to the creator's
-        // own department instead — see cal_user_can_manage_event() in
-        // config.php for the matching edit/delete-permission scoping.
-        $stmt = db()->prepare('SELECT department_id FROM users WHERE id = ?');
-        $stmt->execute([$creatorId]);
-        $creatorDept = $stmt->fetchColumn();
-        if (!$creatorDept) {
-            return [$creatorId];
-        }
-        $rows = db()->prepare('SELECT id FROM users WHERE department_id = ?');
-        $rows->execute([$creatorDept]);
-        return array_map('intval', $rows->fetchAll(PDO::FETCH_COLUMN));
-    }
-    return [$creatorId];
-}
-
-/**
- * Generate future occurrence timestamps for an event.
- *
- * For non-recurring events returns just the original start.
- * For recurring events, jumps to near-now and walks forward,
- * returning up to 104 occurrences (~2 yrs of weekly).
- * Only returns timestamps in the future (past ones can't be reminded).
- */
-function get_future_occurrence_timestamps(array $ev): array
-{
-    $origStart = strtotime($ev['start_datetime']);
-    $nowTS     = time();
-    $recurrEnd = $ev['recurrence_end_date']
-        ? strtotime($ev['recurrence_end_date'] . ' 23:59:59')
-        : ($nowTS + (365 * 86400 * 2)); // default: 2 years ahead
-
-    if (!$ev['is_recurring'] || !$ev['recurrence_rule']) {
-        return [$origStart]; // single event
-    }
-
-    // ── Jump cursor close to now to avoid iterating from months ago ───────────
-    if ($ev['recurrence_rule'] === 'monthly') {
-        $origDay = (int) date('j', $origStart);
-        $origH   = (int) date('H', $origStart);
-        $origI   = (int) date('i', $origStart);
-        $nowY    = (int) date('Y', $nowTS);
-        $nowM    = (int) date('n', $nowTS);
-        $origY   = (int) date('Y', $origStart);
-        $origM   = (int) date('n', $origStart);
-        $months  = max(0, ($nowY - $origY) * 12 + ($nowM - $origM) - 1);
-        $sY      = $origY + intdiv($origM - 1 + $months, 12);
-        $sM      = (($origM - 1 + $months) % 12) + 1;
-        $cursor  = mktime($origH, $origI, 0, $sM, $origDay, $sY);
-    } else {
-        $stepSecs = match ($ev['recurrence_rule']) {
-            'daily'    => 86400,
-            'weekly'   => 604800,
-            'biweekly' => 1209600,
-            default    => 604800,
-        };
-        if ($origStart >= $nowTS) {
-            $cursor = $origStart;
-        } else {
-            $steps  = (int) floor(($nowTS - $origStart) / $stepSecs);
-            $cursor = $origStart + max(0, $steps - 1) * $stepSecs;
-        }
-    }
-
-    // ── Walk forward collecting future occurrences ────────────────────────────
-    $results = [];
-    $safety  = 0;
-    while ($cursor <= $recurrEnd && $safety++ < 104) {
-        if ($cursor >= $origStart) {
-            $results[] = $cursor;
-        }
-        if ($ev['recurrence_rule'] === 'monthly') {
-            $nextM = (int)date('n', $cursor) + 1;
-            $nextY = (int)date('Y', $cursor);
-            if ($nextM > 12) {
-                $nextM = 1;
-                $nextY++;
-            }
-            $cursor = mktime(
-                (int)date('H', $origStart),
-                (int)date('i', $origStart),
-                0,
-                $nextM,
-                (int)date('j', $origStart),
-                $nextY
-            );
-        } else {
-            $stepSecs = match ($ev['recurrence_rule']) {
-                'daily'    => 86400,
-                'weekly'   => 604800,
-                'biweekly' => 1209600,
-                default    => 604800,
-            };
-            $cursor += $stepSecs;
-        }
-    }
-    return $results;
-}
-
-/**
- * Schedule calendar_notifications rows for an event.
- *
- * TIME TRACKING FIX:
- * Previously only one notification row was created (for the single start time).
- * Now for recurring events we create a row for EVERY future occurrence.
- * The cron job reads these rows WHERE scheduled_at <= NOW() — so the moment
- * the server clock passes the reminder time, the notification fires automatically.
- *
- * This is how the system tracks time: it pre-schedules all future reminders
- * in the DB and the cron just checks if any are due.
- */
-function schedule_notification(
-    int $eventId,
-    int $startTS,
-    int $remindMins,
-    int $creatorId,
-    string $scope,
-    ?int $courseId,
-    int $email,
-    int $web
-): void {
-    // Re-fetch event to get recurrence data
-    $evRow = db()->prepare('SELECT * FROM calendar_events WHERE id = ?');
-    $evRow->execute([$eventId]);
-    $ev = $evRow->fetch();
-    if (!$ev) return;
-
-    $userIds     = collect_audience($creatorId, $scope, $courseId);
-    $occurrences = get_future_occurrence_timestamps($ev);
-
-    $ins = db()->prepare('
-        INSERT IGNORE INTO calendar_notifications
-            (event_id, user_id, scheduled_at, sent_email, sent_web)
-        VALUES (?, ?, ?, 0, 0)
-    ');
-
-    foreach ($occurrences as $occTS) {
-        // The occurrence itself must still be ahead of us — if it's already
-        // happened there is genuinely nothing left to remind anyone about,
-        // so this (and only this) is a real "skip" condition.
-        if ($occTS <= time()) {
-            continue;
-        }
-
-        // The naive "N minutes before" moment can itself already be in the
-        // past (e.g. a 30-min-before reminder for an event starting in 20
-        // minutes, or an event edited after its original reminder moment
-        // already elapsed). That does NOT mean the reminder should be
-        // dropped — the event hasn't happened yet, so clamp the fire time
-        // up to "now" instead of skipping, so the very next poll/cron cycle
-        // sends it immediately rather than never at all.
-        $computedFireTS = $occTS - ($remindMins * 60);
-        $fireAt = date('Y-m-d H:i:s', max($computedFireTS, time()));
-
-        foreach ($userIds as $uid) {
-            $ins->execute([$eventId, $uid, $fireAt]);
-        }
-    }
-}
-
-function reschedule_notification(
-    int $eventId,
-    int $startTS,
-    int $remindMins,
-    int $creatorId,
-    int $email,
-    int $web
-): void {
-    // Delete all pending (unsent) notifications for this event
-    db()->prepare('DELETE FROM calendar_notifications WHERE event_id = ? AND sent_email = 0 AND sent_web = 0')
-        ->execute([$eventId]);
-
-    // Fetch event and rebuild
-    $evRow = db()->prepare('SELECT * FROM calendar_events WHERE id = ?');
-    $evRow->execute([$eventId]);
-    $ev = $evRow->fetch();
-    if (!$ev) return;
-
-    schedule_notification(
-        $eventId,
-        $startTS,
-        $remindMins,
-        (int) $ev['created_by'],
-        $ev['scope'],
-        $ev['course_id'] ? (int) $ev['course_id'] : null,
-        $email,
-        $web
-    );
+    return reminder_audience(['created_by'=>$creatorId,'scope'=>$scope,'course_id'=>$courseId]);
 }
 
 /**
  * Task 6 — immediate "Event Updated" notice, sent once at edit time.
  *
- * Deliberately separate from schedule_notification()/calendar_notifications:
+ * Deliberately separate from scheduled reminder delivery jobs:
  * this is a single, synchronous send triggered directly by one edit POST
  * request, not a polled/claimed row — there's no concurrent-firing race to
  * guard against here the way there is for the cron/poll-driven reminder

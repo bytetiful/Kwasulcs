@@ -1,0 +1,173 @@
+.privacy-ack-open {
+    overflow: hidden;
+}
+
+.privacy-ack-overlay {
+    position: fixed;
+    z-index: 12000;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    background: rgba(15, 23, 42, .68);
+    overscroll-behavior: contain;
+}
+
+.privacy-ack-overlay[hidden] {
+    display: none;
+}
+
+.privacy-ack-dialog {
+    width: min(100%, 540px);
+    max-height: calc(100dvh - 40px);
+    overflow-y: auto;
+    padding: 32px;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: var(--panel);
+    box-shadow: var(--shadow-xl);
+    color: var(--text);
+}
+
+.privacy-ack-dialog:focus {
+    outline: none;
+}
+
+.privacy-ack-icon {
+    width: 56px;
+    height: 56px;
+    display: grid;
+    place-items: center;
+    margin-bottom: 22px;
+    border-radius: 17px;
+    background: color-mix(in srgb, var(--primary) 11%, var(--panel));
+    color: var(--primary-dark);
+    font-size: 27px;
+}
+
+.privacy-ack-eyebrow {
+    margin: 0 0 8px;
+    color: var(--primary-dark);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+}
+
+.privacy-ack-copy h2 {
+    margin: 0 0 14px;
+    font-size: clamp(1.65rem, 5vw, 2rem);
+    line-height: 1.15;
+}
+
+.privacy-ack-copy p {
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.65;
+}
+
+.privacy-ack-copy #privacyAcknowledgementDescription {
+    margin: 0 0 14px;
+}
+
+.privacy-ack-note {
+    margin: 0;
+    color: var(--text) !important;
+    font-weight: 700;
+}
+
+.privacy-ack-error {
+    margin: 20px 0 0;
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--danger) 8%, var(--panel));
+    color: #b91c1c;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.privacy-ack-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 28px;
+}
+
+.privacy-ack-button {
+    min-height: 48px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    padding: 11px 18px;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 750;
+    line-height: 1.25;
+    text-align: center;
+    cursor: pointer;
+}
+
+.privacy-ack-button--secondary {
+    background: var(--panel);
+    color: var(--primary-dark);
+}
+
+.privacy-ack-button--secondary:hover {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 6%, var(--panel));
+}
+
+.privacy-ack-button--primary {
+    border-color: var(--primary-dark);
+    background: var(--primary-dark);
+    color: #ffffff;
+}
+
+.privacy-ack-button--primary:hover {
+    background: color-mix(in srgb, var(--primary-dark) 88%, #000000);
+}
+
+.privacy-ack-button--primary:disabled {
+    cursor: wait;
+    opacity: .65;
+}
+
+[data-theme="dark"] .privacy-ack-icon,
+[data-theme="dark"] .privacy-ack-eyebrow,
+[data-theme="dark"] .privacy-ack-button--secondary {
+    color: #86efac;
+}
+
+[data-theme="dark"] .privacy-ack-error {
+    color: #fecaca;
+}
+
+@media (max-width: 480px) {
+    .privacy-ack-dialog {
+        padding: 26px 20px 22px;
+        border-radius: 20px;
+    }
+
+    .privacy-ack-icon {
+        width: 50px;
+        height: 50px;
+        margin-bottom: 18px;
+        border-radius: 15px;
+        font-size: 24px;
+    }
+
+    .privacy-ack-actions {
+        margin-top: 24px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .privacy-ack-overlay,
+    .privacy-ack-dialog {
+        scroll-behavior: auto;
+    }
+}

@@ -1,5 +1,7 @@
 <?php
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/assignment_test.php';
+require_once __DIR__ . '/includes/online_quiz.php';
 require_login();
 // ensure_chat_tables() removed here — schema already established in
 // production. See config.php's ensure_chat_tables().
@@ -86,12 +88,14 @@ foreach ($stuStmt->fetchAll() as $s) {
         $seenMemberIds[(int) $s['id']] = true;
     }
 }
+require_once __DIR__ . '/includes/pwa.php';
+pwa_mark_cacheable_page((int) $user['id']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
 
 <head>
-    <?php $pageTitle = $course['code'] . ' Group Chat'; $extraCss = ['assets/chat.css']; include __DIR__ . '/partials/head.php'; ?>
+    <?php $pageTitle = $course['code'] . ' Group Chat'; $extraCss = ['assets/chat.css', 'assets/assignment-test.css']; include __DIR__ . '/partials/head.php'; ?>
 </head>
 
 <body class="app-body">
@@ -99,7 +103,7 @@ foreach ($stuStmt->fetchAll() as $s) {
     <?php include __DIR__ . '/partials/appheader.php'; ?>
 
     <div class="chat-thread-header">
-        <a class="chat-icon-btn" href="chat.php" aria-label="Back to Chat" title="Back to Chat"><i class="bi bi-arrow-left"></i></a>
+        <a class="chat-icon-btn" href="chat" aria-label="Back to Assessment/Chat" title="Back to Assessment/Chat"><i class="bi bi-arrow-left"></i></a>
         <div class="chat-avatar chat-thread-avatar" style="background:<?php echo user_color($courseId); ?>;color:#fff;"><?php echo h(substr($course['code'], 0, 2)); ?></div>
         <div class="chat-thread-info">
             <strong><?php echo h($course['code']); ?> — <?php echo h($course['title']); ?></strong>
@@ -127,15 +131,20 @@ foreach ($stuStmt->fetchAll() as $s) {
                     $isLecturer = (int) $m['sender_id'] === (int) $course['lecturer_id'];
                     $isAdmin = $m['sender_role'] === 'admin';
                     $senderColor = user_color((int) $m['sender_id']);
+                    $assignmentCard = !empty($m['assignment_test_id']) ? assignment_test_chat_card_bundle((int) $m['assignment_test_id'], $user) : null;
+                    if(!empty($m['online_quiz_id'])) {
+                        $quizCard=oq_chat_bundle((int)$m['online_quiz_id'],$user);
+                        $assignmentCard=['assignment_test'=>$quizCard['online_quiz'],'assignment_test_card_html'=>$quizCard['online_quiz_card_html']];
+                    }
                     $msgDate = date('Y-m-d', strtotime($m['created_at']));
                     $isRead = $isMe && $readUpto > 0 && (int) $m['id'] <= $readUpto;
                 ?>
                     <?php if ($msgDate !== $__lastDate): $__lastDate = $msgDate; ?>
                         <div class="chat-date-sep"><span><?php echo h(chat_date_separator_label($m['created_at'])); ?></span></div>
                     <?php endif; ?>
-                    <div class="chat-msg-row <?php echo $isMe ? 'me' : 'them'; ?>" data-msg-id="<?php echo (int) $m['id']; ?>" data-search="<?php echo h(strtolower($m['content'] ?? '')); ?>" data-raw-content="<?php echo h($m['content'] ?? ''); ?>">
+                    <div class="chat-msg-row <?php echo $isMe ? 'me' : 'them'; ?>" data-msg-id="<?php echo (int) $m['id']; ?>" data-search="<?php echo h(strtolower(trim(($m['content'] ?? '') . ' ' . ($assignmentCard['assignment_test']['title'] ?? '') . ' ' . ($assignmentCard['assignment_test']['type_label'] ?? '')))); ?>" data-raw-content="<?php echo h($m['content'] ?? ''); ?>">
                         <?php if (!$isMe): ?>
-                            <a class="chat-avatar-msg" href="chat_dm.php?with=<?php echo (int) $m['sender_id']; ?>"
+                            <a class="chat-avatar-msg" href="chat_dm?with=<?php echo (int) $m['sender_id']; ?>"
                                 style="background:<?php echo $senderColor; ?>" title="Message <?php echo h($m['sender_name']); ?>">
                                 <?php echo avatar_inner_html($m['sender_name'], $m['sender_picture'] ?? null); ?>
                             </a>
@@ -143,14 +152,16 @@ foreach ($stuStmt->fetchAll() as $s) {
                         <div class="chat-bubble-col">
                             <?php if (!$isMe): ?>
                                 <div class="chat-msg-name-row">
-                                    <a href="chat_dm.php?with=<?php echo (int) $m['sender_id']; ?>" style="color:<?php echo $senderColor; ?>">
+                                    <a href="chat_dm?with=<?php echo (int) $m['sender_id']; ?>" style="color:<?php echo $senderColor; ?>">
                                         <?php echo h($m['sender_name']); ?>
                                     </a>
                                     <?php if ($isLecturer): ?><span class="chat-role-pill lecturer">Lecturer</span><?php endif; ?>
                                     <?php if ($isAdmin): ?><span class="chat-role-pill admin">Admin</span><?php endif; ?>
                                 </div>
                             <?php endif; ?>
-                            <?php if ($m['deleted_at']): ?>
+                            <?php if ($assignmentCard): ?>
+                                <?php echo $assignmentCard['assignment_test_card_html']; ?>
+                            <?php elseif ($m['deleted_at']): ?>
                                 <div class="chat-bubble chat-bubble-deleted <?php echo $isMe ? 'me' : 'them'; ?>">
                                     <i class="bi bi-slash-circle"></i> This message was deleted
                                 </div>
@@ -166,12 +177,12 @@ foreach ($stuStmt->fetchAll() as $s) {
                                 <span class="chat-msg-time">
                                     <?php echo date('g:i A', strtotime($m['created_at'])); ?><?php echo ($m['edited_at'] && !$m['deleted_at']) ? ' · edited' : ''; ?>
                                 </span>
-                                <?php if ($isMe && !$m['deleted_at']): ?>
+                                <?php if ($isMe && !$m['deleted_at'] && !$assignmentCard): ?>
                                     <span class="chat-receipt<?php echo $isRead ? ' read' : ''; ?>" title="<?php echo $isRead ? 'Read' : 'Sent'; ?>">
                                         <i class="bi <?php echo $isRead ? 'bi-check2-all' : 'bi-check2'; ?>"></i>
                                     </span>
                                 <?php endif; ?>
-                                <?php if ($isMe && !$m['deleted_at']): ?>
+                                <?php if ($isMe && !$m['deleted_at'] && !$assignmentCard): ?>
                                     <div class="chat-msg-actions">
                                         <?php if ($m['content']): ?>
                                             <button type="button" class="chat-msg-action-btn chat-msg-edit-btn" title="Edit message"><i class="bi bi-pencil-fill"></i></button>
@@ -228,7 +239,7 @@ foreach ($stuStmt->fetchAll() as $s) {
                     <?php if ($isSelf): ?>
                         <div class="chat-member-row self">
                     <?php else: ?>
-                        <a class="chat-member-row" href="chat_dm.php?with=<?php echo (int) $mem['id']; ?>">
+                        <a class="chat-member-row" href="chat_dm?with=<?php echo (int) $mem['id']; ?>">
                     <?php endif; ?>
                         <div class="chat-member-avatar" style="background:<?php echo $memColor; ?>">
                             <?php echo avatar_inner_html($mem['name'], $mem['picture'] ?? null); ?>
@@ -344,6 +355,7 @@ foreach ($stuStmt->fetchAll() as $s) {
             });
 
             function renderMessage(m) {
+                if(m.online_quiz_card_html){m.assignment_test_card_html=m.online_quiz_card_html;m.assignment_test=m.online_quiz;}
                 if (messagesEl.querySelector('[data-msg-id="' + m.id + '"]')) return;
                 if (m.created_at) maybeInsertDateSeparator(m.created_at);
 
@@ -351,21 +363,23 @@ foreach ($stuStmt->fetchAll() as $s) {
                 const row = document.createElement('div');
                 row.className = 'chat-msg-row ' + (isMe ? 'me' : 'them');
                 row.dataset.msgId = m.id;
-                row.dataset.search = (m.content || '').toLowerCase();
+                row.dataset.search = ((m.content || '') + ' ' + (m.assignment_test?.title || '') + ' ' + (m.assignment_test?.type_label || '')).toLowerCase();
                 row.dataset.rawContent = m.content || '';
 
                 let html = '';
                 if (!isMe) {
-                    html += '<a class="chat-avatar-msg" href="chat_dm.php?with=' + m.sender_id + '" style="background:' + m.sender_color + '" title="Message ' + escHtml(m.sender_name) + '">' + avatarInnerHtml(m.sender_picture, m.sender_initials) + '</a>';
+                    html += '<a class="chat-avatar-msg" href="chat_dm?with=' + m.sender_id + '" style="background:' + m.sender_color + '" title="Message ' + escHtml(m.sender_name) + '">' + avatarInnerHtml(m.sender_picture, m.sender_initials) + '</a>';
                 }
                 html += '<div class="chat-bubble-col">';
                 if (!isMe) {
-                    html += '<div class="chat-msg-name-row"><a href="chat_dm.php?with=' + m.sender_id + '" style="color:' + m.sender_color + '">' + escHtml(m.sender_name) + '</a>';
+                    html += '<div class="chat-msg-name-row"><a href="chat_dm?with=' + m.sender_id + '" style="color:' + m.sender_color + '">' + escHtml(m.sender_name) + '</a>';
                     if (m.is_lecturer) html += ' <span class="chat-role-pill lecturer">Lecturer</span>';
                     if (m.sender_role === 'admin') html += ' <span class="chat-role-pill admin">Admin</span>';
                     html += '</div>';
                 }
-                if (m.deleted_at) {
+                if (m.assignment_test_card_html) {
+                    html += m.assignment_test_card_html;
+                } else if (m.deleted_at) {
                     html += '<div class="chat-bubble chat-bubble-deleted ' + (isMe ? 'me' : 'them') + '"><i class="bi bi-slash-circle"></i> This message was deleted</div>';
                 } else {
                     let bubbleInner = '<div class="chat-bubble-text">';
@@ -376,7 +390,7 @@ foreach ($stuStmt->fetchAll() as $s) {
                 }
                 html += '<div class="chat-msg-meta">';
                 if (m.created_at) html += '<span class="chat-msg-time">' + formatTime(m.created_at) + (m.edited_at && !m.deleted_at ? ' · edited' : '') + '</span>';
-                if (isMe && !m.deleted_at) {
+                if (isMe && !m.deleted_at && !m.assignment_test_card_html) {
                     html += '<span class="chat-receipt" title="Sent"><i class="bi bi-check2"></i></span>';
                     html += '<div class="chat-msg-actions">';
                     if (m.content) html += '<button type="button" class="chat-msg-action-btn chat-msg-edit-btn" title="Edit message"><i class="bi bi-pencil-fill"></i></button>';
@@ -405,10 +419,17 @@ foreach ($stuStmt->fetchAll() as $s) {
             // participant edits/deletes it (see the `updates` array chat_poll.php
             // returns, since regular polling only reports brand-new ids).
             function applyMessageUpdate(u) {
+                if(u.online_quiz_card_html){u.assignment_test_card_html=u.online_quiz_card_html;u.assignment_test=u.online_quiz;}
                 const row = messagesEl.querySelector('[data-msg-id="' + u.id + '"]');
                 if (!row) return;
                 const bubbleCol = row.querySelector('.chat-bubble-col');
                 const isMe = row.classList.contains('me');
+                if (u.assignment_test_card_html) {
+                    const card = row.querySelector('.assignment-test-chat-card');
+                    if (card && card.outerHTML !== u.assignment_test_card_html && !card.contains(document.activeElement)) card.outerHTML = u.assignment_test_card_html;
+                    row.dataset.search = ((u.assignment_test?.title || '') + ' ' + (u.assignment_test?.type_label || '')).toLowerCase();
+                    return;
+                }
                 if (u.deleted_at) {
                     const bubble = row.querySelector('.chat-bubble');
                     if (bubble) bubble.outerHTML = '<div class="chat-bubble chat-bubble-deleted ' + (isMe ? 'me' : 'them') + '"><i class="bi bi-slash-circle"></i> This message was deleted</div>';

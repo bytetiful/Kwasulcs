@@ -7,7 +7,7 @@ require_once __DIR__ . '/includes/google_oauth.php';
 require_login();
 
 if (!google_oauth_configured()) {
-    header('Location: settings.php?google=not_configured');
+    header('Location: settings?google=not_configured');
     exit();
 }
 

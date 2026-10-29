@@ -1,0 +1,149 @@
+:root {
+  --pwa-green: #078a2e;
+  --pwa-green-dark: #056b24;
+  --pwa-surface: #fff;
+  --pwa-muted: #60718d;
+  --pwa-border: #dbe4ef;
+}
+
+[data-theme="dark"] {
+  --pwa-surface: #172033;
+  --pwa-muted: #c1cbe0;
+  --pwa-border: #35415a;
+}
+
+.pwa-status-region {
+  position: fixed;
+  z-index: 2100;
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(88px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pwa-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  min-height: 48px;
+  padding: 10px 12px 10px 16px;
+  color: #fff;
+  background: #172033;
+  border-radius: 14px;
+  box-shadow: 0 12px 34px rgba(8, 18, 38, .28);
+  pointer-events: auto;
+}
+
+.pwa-toast.is-offline { background: #7b4d00; }
+.pwa-toast.is-online { background: var(--pwa-green-dark); }
+.pwa-toast button {
+  min-height: 44px;
+  border: 1px solid rgba(255,255,255,.45);
+  border-radius: 10px;
+  padding: 0 14px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pwa-connectivity-banner {
+  position: fixed;
+  z-index: 2050;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  min-height: 38px;
+  padding: 7px 10px;
+  color: #fff;
+  background: #28415f;
+  border: 1px solid rgba(255, 255, 255, .28);
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(8, 18, 38, .2);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.pwa-connectivity-banner[hidden] { display: none !important; }
+.pwa-connectivity-banner.is-offline { background: #684100; }
+.pwa-connectivity-banner.is-poor { background: #765000; }
+.pwa-connectivity-banner.is-online { background: var(--pwa-green-dark); }
+.pwa-connectivity-banner span { min-width: 0; overflow-wrap: anywhere; }
+.pwa-connectivity-banner button {
+  min-height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255, 255, 255, .55);
+  border-radius: 999px;
+  padding: 0 12px;
+  color: inherit;
+  background: rgba(255, 255, 255, .1);
+  font: inherit;
+  cursor: pointer;
+}
+.pwa-connectivity-banner button:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+}
+
+.pwa-snapshot-mode form[data-pwa-readonly="true"] button[disabled],
+.pwa-snapshot-mode form[data-pwa-readonly="true"] input[disabled] {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.pwa-online-required {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-inline-start: 8px;
+  padding: 2px 8px;
+  color: #684100;
+  background: #fff1c7;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+[data-theme="dark"] .pwa-online-required { color: #ffe7a0; background: #593d00; }
+
+
+.pwa-settings-panel .pwa-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.pwa-capability-card {
+  border: 1px solid var(--border, var(--pwa-border));
+  border-radius: 16px;
+  padding: 18px;
+  background: var(--surface, var(--pwa-surface));
+}
+.pwa-capability-card h3 { margin: 0 0 6px; }
+.pwa-capability-card p { margin: 0 0 14px; color: var(--muted, var(--pwa-muted)); }
+.pwa-capability-card .btn { min-height: 44px; }
+
+@media (max-width: 640px) {
+  .pwa-settings-panel .pwa-capability-grid { grid-template-columns: 1fr; }
+  .pwa-status-region { bottom: calc(82px + env(safe-area-inset-bottom)); }
+  .pwa-connectivity-banner {
+    left: max(12px, env(safe-area-inset-left));
+    right: max(82px, calc(70px + env(safe-area-inset-right)));
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    transform: none;
+    width: auto;
+    max-width: none;
+    border-radius: 14px;
+  }
+  .pwa-connectivity-banner button { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pwa-toast, .pwa-connectivity-banner { transition: none !important; }
+}

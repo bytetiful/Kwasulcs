@@ -4,3 +4,32 @@
 <FilesMatch "^(\.env(\..*)?|config\.php)$">
     Require all denied
 </FilesMatch>
+
+# Canonical public screens only. Internal PHP files, POST endpoints, APIs,
+# signed resolvers, downloads, workers and protected runners retain their URLs.
+Options -MultiViews
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # THE_REQUEST prevents a clean URL's internal PHP rewrite from redirecting.
+    # Browser fetch/XHR requests and JSON callers keep their explicit endpoint.
+    RewriteCond %{REQUEST_METHOD} ^(?:GET|HEAD)$
+    RewriteCond %{HTTP:X-Requested-With} !^XMLHttpRequest$ [NC]
+    RewriteCond %{HTTP:Sec-Fetch-Dest} ^(?:document|iframe|)$ [NC]
+    RewriteCond %{HTTP_ACCEPT} !application/json [NC]
+    RewriteCond %{THE_REQUEST} \s/+([^?\s]*/)?[a-zA-Z0-9_-]+\.php(?:[?\s])
+    RewriteRule ^(dashboard|courses|course|calendar|settings|notifications|profile|privacy-policy|chat|chat_ai|chat_dm|chat_group|assignment_tests|assignment_test|assignment_test_receipt|assignment_test_submissions|assignment_test_audit|online_quiz|online_quiz_edit|online_quiz_monitor|online_quiz_result|forgot_password)\.php$ /%1$1 [R=301,L,NE]
+
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(dashboard|courses|course|calendar|settings|notifications|profile|privacy-policy|chat|chat_ai|chat_dm|chat_group|assignment_tests|assignment_test|assignment_test_receipt|assignment_test_submissions|assignment_test_audit|online_quiz|online_quiz_edit|online_quiz_monitor|online_quiz_result|forgot_password)$ $1.php [END]
+</IfModule>
+
+# PWA metadata must have a standards-compliant MIME type. The manifest and
+# root service worker are stable URLs, so browsers must revalidate them rather
+# than keeping a year-long immutable copy from the static-asset policy.
+AddType application/manifest+json .webmanifest
+<IfModule mod_headers.c>
+    <FilesMatch "^(sw\.js|site\.webmanifest)$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+</IfModule>

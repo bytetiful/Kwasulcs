@@ -157,9 +157,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $topic = $stmt->fetch();
             if (!$topic || !can_see_course($topic, $user)) throw new RuntimeException('Topic not found.');
             if ($title === '') throw new RuntimeException('Provide a document title.');
-            $upload = save_upload($_FILES['document_file'] ?? [], 'topics');
+            $upload = save_upload($_FILES['document_file'] ?? [], 'topics'); // throws on failure — nothing below runs, no document row, no index job
             db()->prepare('INSERT INTO documents (topic_id,title,file_path,file_type) VALUES (?,?,?,?)')
-                ->execute([$topicId, $title, $upload['path'], $upload['ext']]);
+                ->execute([$topicId, $title, $upload['path'], $upload['ext']]); // throws on failure — no index job either
+            $newDocumentId = (int) db()->lastInsertId();
+            // Phase 1D: hash + queue only AFTER the document is durably
+            // stored. Pure DB/filesystem bookkeeping — no AI call, no
+            // synchronous worker run — so this request still returns
+            // immediately, exactly as before. See
+            // queue_new_document_for_indexing() in config.php.
+            queue_new_document_for_indexing($newDocumentId, PRIVATE_UPLOAD_ROOT . '/' . ltrim($upload['path'], '/'));
             $messages[] = 'Document uploaded.';
         }
 
@@ -259,14 +266,38 @@ if (!empty($_SESSION['admin_flash'])) {
 // listing query so an admin never even SEES another department's courses,
 // not just gets blocked from mutating them.
 if ($user['role'] === 'admin') {
-    $stmt = db()->prepare('SELECT c.*,u.full_name AS lecturer_name, d.code AS department_code FROM courses c JOIN users u ON u.id=c.lecturer_id LEFT JOIN departments d ON d.id=c.department_id WHERE c.department_id=? ORDER BY c.created_at DESC');
+    $stmt = db()->prepare('SELECT c.*,u.full_name AS lecturer_name, d.code AS department_code,
+        (SELECT COUNT(*) FROM enrollments e WHERE e.course_id=c.id) AS enrolled_count,
+        (SELECT COUNT(*) FROM topics t WHERE t.course_id=c.id) AS topic_count
+        FROM courses c JOIN users u ON u.id=c.lecturer_id
+        LEFT JOIN departments d ON d.id=c.department_id
+        WHERE c.department_id=? ORDER BY c.created_at DESC');
     $stmt->execute([$user['department_id'] ?? 0]);
     $courses = $stmt->fetchAll();
 } else {
-    $stmt = db()->prepare('SELECT c.*,u.full_name AS lecturer_name, d.code AS department_code FROM courses c JOIN users u ON u.id=c.lecturer_id LEFT JOIN departments d ON d.id=c.department_id WHERE c.lecturer_id=? ORDER BY c.created_at DESC');
+    $stmt = db()->prepare('SELECT c.*,u.full_name AS lecturer_name, d.code AS department_code,
+        (SELECT COUNT(*) FROM enrollments e WHERE e.course_id=c.id) AS enrolled_count,
+        (SELECT COUNT(*) FROM topics t WHERE t.course_id=c.id) AS topic_count
+        FROM courses c JOIN users u ON u.id=c.lecturer_id
+        LEFT JOIN departments d ON d.id=c.department_id
+        WHERE c.lecturer_id=? ORDER BY c.created_at DESC');
     $stmt->execute([$user['id']]);
     $courses = $stmt->fetchAll();
 }
+
+// Reuse the same stable, derived course patterns as the learner-facing list.
+// No duplicate course-theme column is needed.
+$coursePatterns = course_pattern_map($courses);
+$courseLevels = array_values(array_unique(array_map(static fn(array $course): int => (int)($course['level'] ?? 0), $courses)));
+$courseLevels = array_values(array_filter($courseLevels));
+rsort($courseLevels);
+$courseDepartments = [];
+foreach ($courses as $course) {
+    if (!empty($course['department_code'])) {
+        $courseDepartments[(string)$course['department_code']] = (string)$course['department_code'];
+    }
+}
+ksort($courseDepartments);
 
 // Same department scoping applied to the "who can own this course" picker
 // — an admin should not even see another department's staff list here.
@@ -374,25 +405,27 @@ function section_type_label(string $t): string
 
 <body class="app-body">
     <?php include __DIR__ . '/partials/nav.php'; ?>
-    <?php include __DIR__ . '/partials/appheader.php'; ?>
+    <section class="app-hero">
+        <?php include __DIR__ . '/partials/appheader.php'; ?>
 
-    <header class="topbar">
-        <div>
-            <div class="eyebrow">Management</div>
-            <h1>Content Management</h1>
-            <?php if ($activeCourse): ?>
-                <p class="muted">Managing: <strong><?php echo h($activeCourse['code'] . ' — ' . $activeCourse['title']); ?></strong></p>
-            <?php else: ?>
-                <p class="muted">Select a course below to manage its content.</p>
-            <?php endif; ?>
-        </div>
-        <div class="topbar-actions">
-            <?php if ($activeCourse): ?>
-                <a class="btn glass" href="admin.php">← All Courses</a>
-            <?php endif; ?>
-            <a class="btn glass btn-go-dashboard" href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
-        </div>
-    </header>
+        <header class="topbar">
+            <div>
+                <div class="eyebrow">Management</div>
+                <h1>Content Management</h1>
+                <?php if ($activeCourse): ?>
+                    <p class="muted">Managing: <strong><?php echo h($activeCourse['code'] . ' — ' . $activeCourse['title']); ?></strong></p>
+                <?php else: ?>
+                    <p class="muted">Select a course below to manage its content.</p>
+                <?php endif; ?>
+            </div>
+            <div class="topbar-actions">
+                <?php if ($activeCourse): ?>
+                    <a class="btn glass" href="admin.php">← All Courses</a>
+                <?php endif; ?>
+                <a class="btn glass btn-go-dashboard" href="dashboard"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
+            </div>
+        </header>
+    </section>
 
     <main class="page">
 
@@ -408,104 +441,252 @@ function section_type_label(string $t): string
      COURSE LIST + CREATE FORM
      ═══════════════════════════════════════════════════════════════════════════ -->
 
-            <section class="panel">
-                <h2><?php echo $editCourse ? 'Edit Course' : 'Create New Course'; ?></h2>
-                <form method="post" class="form-grid">
-                    <input type="hidden" name="action" value="save_course">
-                    <input type="hidden" name="course_id" value="<?php echo (int)($_GET['edit_course'] ?? 0); ?>">
-                    <label>Title
-                        <input type="text" name="title" value="<?php echo h($editCourse['title'] ?? ''); ?>" required>
-                    </label>
-                    <label>Code
-                        <input type="text" name="code" value="<?php echo h($editCourse['code'] ?? ''); ?>" required>
-                    </label>
-                    <label>Semester
-                        <select name="semester" required>
-                            <option value="">Select</option>
-                            <option value="rain" <?php echo selected($editCourse['semester'] ?? '', 'rain'); ?>>Rain</option>
-                            <option value="harmattan" <?php echo selected($editCourse['semester'] ?? '', 'harmattan'); ?>>Harmattan</option>
-                        </select>
-                    </label>
-                    <label>Lecturer
-                        <select name="lecturer_id" required>
-                            <?php foreach ($allLecturers as $l): ?>
-                                <option value="<?php echo (int)$l['id']; ?>" <?php echo selected($editCourse['lecturer_id'] ?? $user['id'], $l['id']); ?>>
-                                    <?php echo h($l['full_name'] . ' (' . $l['matric_no'] . ')'); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </label>
-                    <label>Department
-                        <!-- Read-only — always your own department (Task 19 Part B: no
+            <details class="admin-course-editor" id="course-editor" <?php echo ($editCourse || $errors) ? 'open' : ''; ?>>
+                <summary class="admin-course-editor-summary">
+                    <span class="admin-course-editor-icon" aria-hidden="true"><i class="bi bi-plus-lg"></i></span>
+                    <span class="admin-course-editor-copy">
+                        <strong><?php echo $editCourse ? 'Edit Course' : 'Create New Course'; ?></strong>
+                        <span><?php echo $editCourse ? 'Update this course while retaining its content.' : 'Add a new course to the system.'; ?></span>
+                    </span>
+                    <span class="btn primary admin-course-editor-cta">
+                        <i class="bi <?php echo $editCourse ? 'bi-pencil-square' : 'bi-plus-lg'; ?>"></i>
+                        <?php echo $editCourse ? 'Edit Course' : 'Create Course'; ?>
+                    </span>
+                    <i class="bi bi-chevron-down admin-course-editor-chevron" aria-hidden="true"></i>
+                </summary>
+                <div class="admin-course-editor-body">
+                    <form method="post" class="form-grid admin-course-form">
+                        <input type="hidden" name="action" value="save_course">
+                        <input type="hidden" name="course_id" value="<?php echo (int)($_GET['edit_course'] ?? 0); ?>">
+                        <label>Title
+                            <input type="text" name="title" value="<?php echo h($editCourse['title'] ?? ''); ?>" required>
+                        </label>
+                        <label>Code
+                            <input type="text" name="code" value="<?php echo h($editCourse['code'] ?? ''); ?>" required>
+                        </label>
+                        <label>Semester
+                            <select name="semester" required>
+                                <option value="">Select</option>
+                                <option value="rain" <?php echo selected($editCourse['semester'] ?? '', 'rain'); ?>>Rain</option>
+                                <option value="harmattan" <?php echo selected($editCourse['semester'] ?? '', 'harmattan'); ?>>Harmattan</option>
+                            </select>
+                        </label>
+                        <label>Lecturer
+                            <select name="lecturer_id" required>
+                                <?php foreach ($allLecturers as $l): ?>
+                                    <option value="<?php echo (int)$l['id']; ?>" <?php echo selected($editCourse['lecturer_id'] ?? $user['id'], $l['id']); ?>>
+                                        <?php echo h($l['full_name'] . ' (' . $l['matric_no'] . ')'); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                        <label>Department
+                            <!-- Read-only — always your own department (Task 19 Part B: no
                              cross-department admin authority, so this is never a real
                              choice). The server ignores any department_id in the POST
                              body regardless of what this shows. -->
-                        <input type="text" value="<?php echo h($myDepartmentName); ?>" disabled>
+                            <input type="text" value="<?php echo h($myDepartmentName); ?>" disabled>
+                        </label>
+                        <label>Level
+                            <select name="level" required>
+                                <option value="">Select</option>
+                                <?php foreach ([100, 200, 300, 400] as $lvl): ?>
+                                    <option value="<?php echo $lvl; ?>" <?php echo selected($editCourse['level'] ?? '', $lvl); ?>><?php echo $lvl; ?> Level</option>
+                                <?php endforeach; ?>
+                            </select>
+                        </label>
+                        <label>Color
+                            <div class="color-swatch-picker">
+                                <?php
+                                $selectedColor = $editCourse['color'] ?? reset($__coursePalette);
+                                foreach ($__coursePalette as $label => $hex):
+                                ?>
+                                    <label class="color-swatch-wrap" title="<?php echo h($label); ?>">
+                                        <input type="radio" name="color" value="<?php echo h($hex); ?>" class="color-swatch-input"
+                                            <?php echo $selectedColor === $hex ? 'checked' : ''; ?>>
+                                        <span class="color-swatch" style="background:<?php echo h($hex); ?>;"></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        </label>
+                        <div class="admin-course-form-actions">
+                            <?php if ($editCourse): ?>
+                                <a class="btn secondary" href="admin.php">Cancel</a>
+                            <?php endif; ?>
+                            <button class="btn primary" type="submit"><?php echo $editCourse ? 'Update Course' : 'Create Course'; ?></button>
+                        </div>
+                    </form>
+                </div>
+            </details>
+
+            <?php
+            $__renderCourseCard = function (array $c) use ($coursePatterns, $__coursePalette) {
+                $courseId = (int)$c['id'];
+                $fallbackColor = reset($__coursePalette) ?: '#2563eb';
+                $courseColor = !empty($c['color']) ? (string)$c['color'] : $fallbackColor;
+                $departmentCode = trim((string)($c['department_code'] ?? ''));
+                $level = (int)($c['level'] ?? 0);
+                $levelLabel = trim(($departmentCode !== '' ? $departmentCode . ' ' : '') . ($level ? $level . 'L' : ''));
+            ?>
+                <article class="course-manage-card"
+                    data-pattern="<?php echo (int)($coursePatterns[$courseId] ?? 0); ?>"
+                    data-search="<?php echo h(strtolower($c['code'] . ' ' . $c['title'] . ' ' . $c['lecturer_name'] . ' ' . $departmentCode)); ?>"
+                    data-level="<?php echo $level; ?>"
+                    data-department="<?php echo h($departmentCode); ?>"
+                    data-semester="<?php echo h(strtolower((string)$c['semester'])); ?>"
+                    style="--course-color:<?php echo h($courseColor); ?>;">
+                    <div class="course-manage-identity">
+                        <div class="course-manage-code-row">
+                            <span class="course-code"><?php echo h($c['code']); ?></span>
+                            <?php if ($levelLabel !== ''): ?>
+                                <span class="course-level-badge"><?php echo h($levelLabel); ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <h3 title="<?php echo h($c['title']); ?>"><?php echo h($c['title']); ?></h3>
+                        <p class="course-lecturer"><i class="bi bi-person-fill"></i> <?php echo h($c['lecturer_name']); ?></p>
+                    </div>
+                    <div class="course-manage-meta" aria-label="Course details">
+                        <span><i class="bi bi-people-fill"></i> <?php echo (int)($c['enrolled_count'] ?? 0); ?> students</span>
+                        <span><i class="bi bi-file-earmark-text"></i> <?php echo (int)($c['topic_count'] ?? 0); ?> topics</span>
+                        <span><i class="bi bi-calendar3"></i> <?php echo h(ucfirst((string)$c['semester'])); ?></span>
+                    </div>
+                    <div class="course-manage-actions">
+                        <a class="btn primary course-manage-primary" href="admin.php?manage=<?php echo $courseId; ?>">
+                            <i class="bi bi-folder2-open"></i> Manage Content <i class="bi bi-arrow-right"></i>
+                        </a>
+                        <a class="btn secondary course-manage-secondary" href="admin.php?edit_course=<?php echo $courseId; ?>#course-editor">
+                            <i class="bi bi-pencil"></i> Edit
+                        </a>
+                        <form method="post" onsubmit="return confirm('Delete this course and ALL its content?');">
+                            <input type="hidden" name="action" value="delete_course">
+                            <input type="hidden" name="course_id" value="<?php echo $courseId; ?>">
+                            <button class="btn danger course-manage-secondary" type="submit"><i class="bi bi-trash3"></i> Delete</button>
+                        </form>
+                    </div>
+                </article>
+            <?php
+            };
+            ?>
+
+            <section class="admin-course-catalog" aria-labelledby="course-catalog-heading">
+                <div class="admin-course-catalog-heading">
+                    <div>
+                        <h2 id="course-catalog-heading">Your Courses</h2>
+                        <p class="muted">Manage course content, lecturers, and details.</p>
+                    </div>
+                    <span class="admin-course-result-count" id="adminCourseResultCount"><?php echo count($courses); ?> courses</span>
+                </div>
+
+                <div class="admin-course-toolbar" aria-label="Course filters">
+                    <label class="admin-course-search">
+                        <span class="sr-only">Search courses</span>
+                        <i class="bi bi-search" aria-hidden="true"></i>
+                        <input type="search" id="adminCourseSearch" placeholder="Search your courses..." autocomplete="off">
                     </label>
-                    <label>Level
-                        <select name="level" required>
-                            <option value="">Select</option>
-                            <?php foreach ([100, 200, 300, 400] as $lvl): ?>
-                                <option value="<?php echo $lvl; ?>" <?php echo selected($editCourse['level'] ?? '', $lvl); ?>><?php echo $lvl; ?> Level</option>
+                    <label class="admin-course-select">
+                        <span class="sr-only">Filter by level</span>
+                        <select id="adminCourseLevel">
+                            <option value="">All Levels</option>
+                            <?php foreach ($courseLevels as $levelOption): ?>
+                                <option value="<?php echo $levelOption; ?>"><?php echo $levelOption; ?> Level</option>
                             <?php endforeach; ?>
                         </select>
+                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
                     </label>
-                    <label>Color
-                        <div class="color-swatch-picker">
-                            <?php
-                            $selectedColor = $editCourse['color'] ?? reset($__coursePalette);
-                            foreach ($__coursePalette as $label => $hex):
-                            ?>
-                                <label class="color-swatch-wrap" title="<?php echo h($label); ?>">
-                                    <input type="radio" name="color" value="<?php echo h($hex); ?>" class="color-swatch-input"
-                                        <?php echo $selectedColor === $hex ? 'checked' : ''; ?>>
-                                    <span class="color-swatch" style="background:<?php echo h($hex); ?>;"></span>
-                                </label>
+                    <label class="admin-course-select">
+                        <span class="sr-only">Filter by department</span>
+                        <select id="adminCourseDepartment">
+                            <option value="">All Departments</option>
+                            <?php foreach ($courseDepartments as $departmentOption): ?>
+                                <option value="<?php echo h($departmentOption); ?>"><?php echo h($departmentOption); ?></option>
                             <?php endforeach; ?>
-                        </div>
+                        </select>
+                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
                     </label>
-                    <button class="btn primary" type="submit"><?php echo $editCourse ? 'Update Course' : 'Create Course'; ?></button>
-                </form>
+                    <label class="admin-course-select">
+                        <span class="sr-only">Filter by semester</span>
+                        <select id="adminCourseSemester">
+                            <option value="">All Semesters</option>
+                            <option value="rain">Rain</option>
+                            <option value="harmattan">Harmattan</option>
+                        </select>
+                        <i class="bi bi-chevron-down" aria-hidden="true"></i>
+                    </label>
+                    <div class="admin-course-view-toggle" role="group" aria-label="Course view">
+                        <button type="button" class="active" data-course-view="grid" aria-label="Grid view" aria-pressed="true"><i class="bi bi-grid-fill"></i></button>
+                        <button type="button" data-course-view="list" aria-label="List view" aria-pressed="false"><i class="bi bi-list-ul"></i></button>
+                    </div>
+                </div>
+
+                <?php if (!$courses): ?>
+                    <p class="muted admin-course-empty">No courses yet. Create one above.</p>
+                <?php endif; ?>
+
+                <div class="admin-course-grid" id="adminCourseGrid" data-view="grid">
+                    <?php foreach ($courses as $c) $__renderCourseCard($c); ?>
+                </div>
+                <p class="muted admin-course-empty" id="adminCourseNoResults" hidden>No courses match your filters.</p>
             </section>
 
-            <section class="panel" style="margin-top:18px;">
-                <h2>Your Courses</h2>
-                <?php if (!$courses): ?>
-                    <p class="muted">No courses yet. Create one above.</p>
-                <?php endif; ?>
-                <div class="course-manage-grid">
-                    <?php foreach ($courses as $c): ?>
-                        <div class="course-manage-card">
-                            <div class="course-manage-top">
-                                <div class="course-manage-header">
-                                    <div>
-                                        <span class="course-code"><?php echo h($c['code']); ?></span>
-                                    </div>
-                                    <div class="course-manage-actions">
-                                        <a class="btn tiny secondary" href="admin.php?edit_course=<?php echo (int)$c['id']; ?>">Edit</a>
-                                        <form method="post" style="display:inline;" onsubmit="return confirm('Delete this course and ALL its content?');">
-                                            <input type="hidden" name="action" value="delete_course">
-                                            <input type="hidden" name="course_id" value="<?php echo (int)$c['id']; ?>">
-                                            <button class="btn tiny danger" type="submit">Delete</button>
-                                        </form>
-                                    </div>
-                                </div>
-                                <h3 title="<?php echo h($c['title']); ?>"><?php echo h($c['title']); ?></h3>
-                                <p class="muted">
-                                    <?php echo strtoupper(h($c['semester'])); ?> · <?php echo h($c['lecturer_name']); ?>
-                                    <?php if ($c['department_code']): ?>
-                                        · <?php echo h($c['department_code']); ?><?php echo $c['level'] ? ' ' . (int)$c['level'] . 'L' : ''; ?>
-                                    <?php endif; ?>
-                                </p>
-                            </div>
-                            <a class="btn primary"
-                                href="admin.php?manage=<?php echo (int)$c['id']; ?>">
-                                <i class="bi bi-folder2-open icon"></i> Manage Content →
-                            </a>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-            </section>
+            <script>
+                (function() {
+                    const grid = document.getElementById('adminCourseGrid');
+                    if (!grid) return;
+                    const cards = Array.from(grid.querySelectorAll('.course-manage-card'));
+                    const search = document.getElementById('adminCourseSearch');
+                    const level = document.getElementById('adminCourseLevel');
+                    const department = document.getElementById('adminCourseDepartment');
+                    const semester = document.getElementById('adminCourseSemester');
+                    const noResults = document.getElementById('adminCourseNoResults');
+                    const resultCount = document.getElementById('adminCourseResultCount');
+                    const viewButtons = Array.from(document.querySelectorAll('[data-course-view]'));
+
+                    function applyFilters() {
+                        const query = search.value.trim().toLowerCase();
+                        let visible = 0;
+                        cards.forEach(function(card) {
+                            const matches = (!query || card.dataset.search.includes(query)) &&
+                                (!level.value || card.dataset.level === level.value) &&
+                                (!department.value || card.dataset.department === department.value) &&
+                                (!semester.value || card.dataset.semester === semester.value);
+                            card.hidden = !matches;
+                            if (matches) visible += 1;
+                        });
+                        noResults.hidden = visible !== 0 || cards.length === 0;
+                        resultCount.textContent = visible + (visible === 1 ? ' course' : ' courses');
+                    }
+
+                    function setView(view) {
+                        const nextView = view === 'list' ? 'list' : 'grid';
+                        grid.dataset.view = nextView;
+                        viewButtons.forEach(function(button) {
+                            const active = button.dataset.courseView === nextView;
+                            button.classList.toggle('active', active);
+                            button.setAttribute('aria-pressed', active ? 'true' : 'false');
+                        });
+                        try {
+                            localStorage.setItem('lcsAdminCourseView', nextView);
+                        } catch (error) {}
+                    }
+
+                    search.addEventListener('input', applyFilters);
+                    [level, department, semester].forEach(function(control) {
+                        control.addEventListener('change', applyFilters);
+                    });
+                    viewButtons.forEach(function(button) {
+                        button.addEventListener('click', function() {
+                            setView(button.dataset.courseView);
+                        });
+                    });
+
+                    let savedView = 'grid';
+                    try {
+                        savedView = localStorage.getItem('lcsAdminCourseView') || 'grid';
+                    } catch (error) {}
+                    setView(savedView);
+                    applyFilters();
+                })();
+            </script>
 
         <?php else: ?>
             <!-- ═══════════════════════════════════════════════════════════════════════════
@@ -520,7 +701,7 @@ function section_type_label(string $t): string
                     <span class="muted">·</span>
                     <span class="muted"><?php echo strtoupper(h($activeCourse['semester'])); ?></span>
                 </div>
-                <a class="btn tiny secondary" href="course.php?id=<?php echo $activeCourseId; ?>" target="_blank">
+                <a class="btn tiny secondary" href="course?id=<?php echo $activeCourseId; ?>" target="_blank">
                     <i class="bi bi-eye-fill icon"></i> View Course →
                 </a>
             </div>
@@ -702,7 +883,7 @@ function section_type_label(string $t): string
                 <div class="grid-2" style="margin-top:0;">
 
                     <div class="panel">
-                        <h2>Add Tutorial / Exam Section</h2>
+                        <h2 id="add-section">Add Tutorial / Exam Section</h2>
                         <form method="post" class="form-stack">
                             <input type="hidden" name="action" value="save_section">
                             <input type="hidden" name="active_course_id" value="<?php echo $activeCourseId; ?>">
@@ -721,7 +902,7 @@ function section_type_label(string $t): string
 
                     <?php if ($courseSections): ?>
                         <div class="panel">
-                            <h2>Add Video to Section</h2>
+                            <h2 id="add-section-video">Add Video to Section</h2>
                             <form method="post" class="form-stack">
                                 <input type="hidden" name="action" value="save_section_video">
                                 <input type="hidden" name="active_course_id" value="<?php echo $activeCourseId; ?>">
@@ -746,7 +927,7 @@ function section_type_label(string $t): string
                         </div>
 
                         <div class="panel">
-                            <h2>Upload Document to Section</h2>
+                            <h2 id="add-section-document">Upload Document to Section</h2>
                             <form method="post" class="form-stack" enctype="multipart/form-data">
                                 <input type="hidden" name="action" value="save_section_document">
                                 <input type="hidden" name="active_course_id" value="<?php echo $activeCourseId; ?>">

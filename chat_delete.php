@@ -31,6 +31,11 @@ if ($type === 'group') {
         echo json_encode(['error' => 'You can only delete your own messages.']);
         exit();
     }
+    if (!empty($msg['assignment_test_id']) || !empty($msg['online_quiz_id'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Generated Assignment/Test messages cannot be deleted here.']);
+        exit();
+    }
     db()->prepare('UPDATE chat_messages SET deleted_at = NOW() WHERE id = ?')->execute([$messageId]);
     echo json_encode(['ok' => true]);
     exit();

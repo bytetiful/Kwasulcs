@@ -6,7 +6,7 @@ $user     = current_user();
 $courseId = (int)($_GET['course'] ?? 0);
 
 if ($courseId <= 0) {
-    header('Location: dashboard.php');
+    header('Location: dashboard');
     exit();
 }
 
@@ -15,7 +15,7 @@ $courseStmt = db()->prepare('SELECT c.*, u.full_name AS lecturer_name FROM cours
 $courseStmt->execute([$courseId]);
 $course = $courseStmt->fetch();
 if (!$course) {
-    header('Location: dashboard.php');
+    header('Location: dashboard');
     exit();
 }
 
@@ -716,10 +716,12 @@ try {
             }
         }
     </style>
+    <link rel="stylesheet" href="assets/quiz-refinements.css?v=<?php echo (int) filemtime(__DIR__ . '/assets/quiz-refinements.css'); ?>">
 </head>
 
 <body class="app-body">
     <?php include __DIR__ . '/partials/nav.php'; ?>
+    <section class="app-hero">
     <?php include __DIR__ . '/partials/appheader.php'; ?>
     <header class="topbar">
         <div>
@@ -728,9 +730,10 @@ try {
             <p class="muted">AI-generated practice quiz · <?php echo h($course['lecturer_name']); ?></p>
         </div>
         <div class="topbar-actions">
-            <a class="btn glass" href="course.php?id=<?php echo $courseId; ?>">← Back to Course</a>
+            <a class="btn glass" href="course?id=<?php echo $courseId; ?>">← Back to Course</a>
         </div>
     </header>
+    </section>
 
     <main class="page">
         <div class="quiz-shell">
@@ -1054,16 +1057,22 @@ try {
 
             if (q.type === 'mcq' || q.type === 'truefalse') {
                 html += '<div class="mcq-options">';
-                for (const [letter, text] of Object.entries(q.options || {})) {
+                // Older True/False records may omit options. Keep the stored answer
+                // convention (letters or words), so existing exact-match grading is unchanged.
+                const wordAnswers = /^(true|false)$/i.test(String(q.correct || '').trim());
+                const options = q.type === 'truefalse' && Object.keys(q.options || {}).length < 2
+                    ? (wordAnswers ? {True:'True', False:'False'} : {A:'True', B:'False'}) : (q.options || {});
+                for (const [letter, text] of Object.entries(options)) {
                     let cls = 'mcq-option';
+                    const selected = String(letter).toLowerCase() === String(answer).toLowerCase();
                     if (locked) {
-                        if (letter === q.correct) cls += ' correct';
-                        else if (letter === answer) cls += ' wrong';
-                    } else if (letter === answer) {
+                        if (String(letter).toLowerCase() === String(q.correct).trim().toLowerCase()) cls += ' correct';
+                        else if (selected) cls += ' wrong';
+                    } else if (selected) {
                         cls += ' selected';
                     }
-                    html += `<button class="${cls} ${locked ? 'locked' : ''}" onclick="selectOption('${letter}')">
-                <span class="opt-letter">${letter}</span>
+                    html += `<button type="button" class="${cls} ${locked ? 'locked' : ''}" data-option="${escHtml(letter)}" aria-pressed="${selected}" ${locked ? 'disabled' : ''} onclick="selectOption(this.dataset.option)">
+                <span class="opt-letter" aria-hidden="true">${q.type === 'truefalse' ? (selected ? '&#9679;' : '&#9675;') : escHtml(letter)}</span>
                 <span>${escHtml(text)}</span>
             </button>`;
                 }
@@ -1077,7 +1086,7 @@ try {
                 html += `<textarea class="short-input" id="shortAnswer" placeholder="Type your answer here…" ${locked ? 'readonly' : ''}
             oninput="answers[${no}]=this.value">${escHtml(val)}</textarea>`;
                 if (locked) {
-                    html += `<div style="margin-top:12px;padding:12px 16px;background:#f0fdf4;border-radius:10px;font-size:14px;">
+                    html += `<div class="model-answer" style="margin-top:12px;padding:12px 16px;border-radius:10px;font-size:14px;">
                 <strong style="color:var(--primary-dark);">Model answer:</strong> ${escHtml(q.correct)}</div>`;
                     html += `<div class="marks-awarded-line">Marks awarded: <strong>${q.awarded_marks != null ? q.awarded_marks : '—'} / ${q.marks}</strong></div>`;
                     html += renderBreakdown(q.breakdown);
@@ -1118,6 +1127,7 @@ try {
             if (submitted) return;
             answers[currentQ + 1] = letter;
             renderQuestion();
+            [...document.querySelectorAll('[data-option]')].find(option => option.dataset.option === letter)?.focus({preventScroll:true});
         }
 
         function goTo(index) {

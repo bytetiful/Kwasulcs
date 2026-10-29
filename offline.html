@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#087d32">
+  <title>You're offline · KWASU LCS</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f1f5f9; --card: #fff; --text: #0f172a; --muted: #64748b; --line: #dce5e0; --green: #087d32; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, sans-serif; }
+    main { width: 100%; max-width: 420px; padding: 32px 24px; border: 1px solid var(--line); border-radius: 24px; background: var(--card); text-align: center; box-shadow: 0 12px 36px rgb(15 23 42 / 6%); }
+    .brand { margin: 0 0 24px; color: var(--green); font-weight: 750; letter-spacing: .03em; }
+    h1 { margin: 0 0 10px; font-size: clamp(24px, 6vw, 30px); line-height: 1.2; }
+    .message { margin: 0 0 24px; color: var(--muted); }
+    .actions { display: grid; gap: 12px; }
+    a { display: flex; justify-content: center; align-items: center; min-height: 48px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 14px; color: var(--text); background: var(--card); font-weight: 650; text-decoration: none; }
+    a.primary { color: #fff; background: var(--green); border-color: var(--green); }
+    a:focus-visible { outline: 3px solid var(--green); outline-offset: 4px; }
+    a:active { opacity: .8; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --muted: #abb8cb; --line: #42516a; --green: #15803d; } .brand { color: #4ade80; } }
+  </style>
+  <script src="assets/offline.js" defer></script>
+</head>
+<body>
+  <main aria-labelledby="offline-title">
+    <p class="brand">KWASU LCS</p>
+    <h1 id="offline-title">You're offline</h1>
+    <p class="message">This page isn't available right now. Check your connection and try again.</p>
+    <nav class="actions" aria-label="Offline page actions">
+      <a class="primary" id="offline-retry" href="dashboard">Try again</a>
+      <a id="offline-home" href="dashboard">Go back home</a>
+    </nav>
+  </main>
+</body>
+</html>

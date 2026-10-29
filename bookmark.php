@@ -4,7 +4,7 @@ require_login();
 
 $user = current_user();
 if ($user['role'] !== 'student' || $_SERVER['REQUEST_METHOD'] !== 'POST') {
-    header('Location: dashboard.php');
+    header('Location: dashboard');
     exit();
 }
 
@@ -23,5 +23,5 @@ if ($topicId > 0 && $courseId > 0 && is_enrolled((int)$user['id'], $courseId)) {
     }
 }
 
-header('Location: course.php?id=' . $courseId);
+header('Location: course?id=' . $courseId);
 exit();

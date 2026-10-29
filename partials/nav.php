@@ -1,16 +1,18 @@
 <?php
+require_once dirname(__DIR__) . '/includes/routes.php';
 // Shared app navigation: desktop sidebar + mobile bottom nav + floating
 // feedback button. Requires $user (current_user()) to already be in scope.
-$__navCurrent = basename($_SERVER['PHP_SELF'] ?? '');
+$__navCurrent = lcs_current_page();
+if (str_starts_with($__navCurrent, 'online_quiz')) $__navCurrent = 'chat';
 $__navItems = [
-    ['href' => 'dashboard.php', 'icon' => 'bi-house-door-fill', 'label' => 'Home'],
-    ['href' => 'courses.php',   'icon' => 'bi-journal-bookmark-fill', 'label' => 'Courses'],
-    ['href' => 'calendar.php',  'icon' => 'bi-calendar3', 'label' => 'Calendar'],
-    ['href' => 'chat.php',      'icon' => 'bi-chat-dots-fill', 'label' => 'Chat'],
+    ['href' => 'dashboard', 'icon' => 'bi-house-door-fill', 'label' => 'Home'],
+    ['href' => 'courses',   'icon' => 'bi-journal-bookmark-fill', 'label' => 'Courses'],
+    ['href' => 'calendar',  'icon' => 'bi-calendar3', 'label' => 'Calendar'],
+    ['href' => 'chat',      'icon' => 'bi-chat-dots-fill', 'label' => 'Assessment/Chat'],
 ];
 ?>
 <aside class="sidebar">
-    <a class="sidebar-brand" href="dashboard.php">
+    <a class="sidebar-brand" href="dashboard">
         <?php echo brand_logo(); ?>
         <span>KWASU LCS</span>
     </a>
@@ -23,7 +25,7 @@ $__navItems = [
         <?php endforeach; ?>
     </nav>
     <nav class="sidebar-nav sidebar-bottom">
-        <a class="nav-item<?php echo $__navCurrent === 'settings.php' ? ' active' : ''; ?>" href="settings.php">
+        <a class="nav-item<?php echo $__navCurrent === 'settings' ? ' active' : ''; ?>" href="settings">
             <span class="nav-icon"><i class="bi bi-gear-fill"></i></span>
             <span class="nav-label">Settings</span>
         </a>
@@ -41,7 +43,7 @@ $__navItems = [
     <?php foreach ($__navItems as $item): ?>
         <a class="nav-item<?php echo $__navCurrent === $item['href'] ? ' active' : ''; ?>" href="<?php echo h($item['href']); ?>">
             <span class="nav-icon"><i class="bi <?php echo h($item['icon']); ?>"></i></span>
-            <span class="nav-label"><?php echo h($item['label']); ?></span>
+            <span class="nav-label"><?php echo str_replace('/', '/<wbr>', h($item['label'])); ?></span>
         </a>
     <?php endforeach; ?>
 </nav>
@@ -89,3 +91,4 @@ function submitFeedback() {
         .catch(function () { status.textContent = 'Network error. Please try again.'; });
 }
 </script>
+<?php if (function_exists('current_user')) include __DIR__ . '/privacy_acknowledgement.php'; ?>

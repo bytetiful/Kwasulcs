@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/assignment_test.php';
 require_login();
 // ensure_chat_tables() removed here — schema already established in
 // production; this endpoint was re-running ~11 CREATE/ALTER TABLE
@@ -59,6 +60,8 @@ if ($role === 'student') {
         }
     }
 }
+require_once __DIR__ . '/includes/pwa.php';
+pwa_mark_cacheable_page((int) $user['id']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -67,34 +70,45 @@ if ($role === 'student') {
     <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon/favicon-16x16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/favicon/apple-touch-icon.png">
-    <?php $pageTitle = 'Chat';
-    $extraCss = ['assets/chat.css'];
+    <?php $pageTitle = 'Assessment/Chat';
+    $extraCss = ['assets/chat.css', 'assets/assignment-test.css'];
     include __DIR__ . '/partials/head.php'; ?>
 </head>
 
 <body class="app-body">
     <?php include __DIR__ . '/partials/nav.php'; ?>
+    <section class="app-hero chat-hero">
     <?php include __DIR__ . '/partials/appheader.php'; ?>
 
-    <header class="topbar chat-hero">
+    <header class="topbar">
         <div>
             <div class="eyebrow"><?php echo brand_logo(); ?> KWASU LCS</div>
-            <h1><i class="bi bi-chat-dots-fill icon"></i> Chat</h1>
-            <p class="muted">Course groups, direct messages, and the AI assistant.</p>
+            <h1><i class="bi bi-chat-dots-fill icon"></i> Assessment/Chat</h1>
+            <p class="muted">Assignments, tests, course groups, direct messages, and the AI assistant.</p>
         </div>
         <div class="topbar-actions">
-            <a class="btn glass btn-go-dashboard" href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
+            <a class="btn glass btn-go-dashboard" href="dashboard"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
         </div>
     </header>
+    </section>
 
     <main class="page">
-        <a class="panel chat-ai-card" href="chat_ai.php">
+        <a class="panel chat-ai-card" href="chat_ai">
             <div class="chat-ai-card-icon"><i class="bi bi-robot"></i></div>
             <div class="chat-ai-card-info">
                 <div class="chat-ai-card-title">AI Assistant <span class="chat-badge-new">New</span></div>
                 <p class="muted">Ask questions across all your courses, assignments and lecture materials.</p>
             </div>
             <span class="btn primary chat-ai-card-btn">Start AI Chat</span>
+        </a>
+
+        <a class="panel chat-ai-card chat-assignment-card" href="assignment_tests">
+            <div class="chat-ai-card-icon"><i class="bi bi-file-earmark-text"></i></div>
+            <div class="chat-ai-card-info">
+                <div class="chat-ai-card-title">Assignment/Test</div>
+                <p class="muted">Submit assignments or tests and view your submissions.<br>Lecturers can manage and grade submissions.</p>
+            </div>
+            <span class="btn secondary chat-ai-card-btn">Open Assignment/Test</span>
         </a>
 
         <div class="panel chat-groups-panel" style="margin-top:16px;">
@@ -113,7 +127,7 @@ if ($role === 'student') {
                     <p class="muted" style="padding:12px 0;">No course groups yet.</p>
                 <?php endif; ?>
                 <?php foreach ($groupRows as $g): ?>
-                    <a class="chat-list-row" data-search="<?php echo h(strtolower($g['code'] . ' ' . $g['title'])); ?>" href="chat_group.php?course_id=<?php echo (int) $g['course_id']; ?>">
+                    <a class="chat-list-row" data-search="<?php echo h(strtolower($g['code'] . ' ' . $g['title'])); ?>" href="chat_group?course_id=<?php echo (int) $g['course_id']; ?>">
                         <div class="chat-avatar" style="background:<?php echo user_color((int) $g['course_id']); ?>;color:#fff;"><?php echo h(substr($g['code'], 0, 2)); ?></div>
                         <div class="chat-list-info">
                             <strong><?php echo h($g['code']); ?> — <?php echo h($g['title']); ?></strong>
@@ -139,7 +153,7 @@ if ($role === 'student') {
                 <p class="muted" style="padding:12px 0;">No direct messages yet.</p>
             <?php endif; ?>
             <?php foreach ($dmRows as $d): ?>
-                <a class="chat-list-row" href="chat_dm.php?thread_id=<?php echo (int) $d['thread_id']; ?>">
+                <a class="chat-list-row" href="chat_dm?thread_id=<?php echo (int) $d['thread_id']; ?>">
                     <div class="chat-avatar" style="background:<?php echo user_color($d['other_id']); ?>;color:#fff;"><?php echo avatar_inner_html($d['name'], $d['picture'] ?? null); ?></div>
                     <div class="chat-list-info">
                         <strong><?php echo h($d['name']); ?></strong>
@@ -159,7 +173,7 @@ if ($role === 'student') {
                     <h2 style="font-size:16px;">Start a new chat</h2>
                 </div>
                 <?php foreach ($classmates as $cm): ?>
-                    <a class="chat-list-row" href="chat_dm.php?with=<?php echo (int) $cm['id']; ?>">
+                    <a class="chat-list-row" href="chat_dm?with=<?php echo (int) $cm['id']; ?>">
                         <div class="chat-avatar" style="background:<?php echo user_color((int) $cm['id']); ?>;color:#fff;"><?php echo avatar_inner_html($cm['full_name'], $cm['google_picture'] ?? null); ?></div>
                         <div class="chat-list-info">
                             <strong><?php echo h($cm['full_name']); ?></strong>

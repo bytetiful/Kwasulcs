@@ -12,6 +12,11 @@
     color: #fff;
 }
 
+.chat-avatar--assignment {
+    background: linear-gradient(135deg, #17a848, #087b2b);
+    color: #fff;
+}
+
 /* ── chat_ai.php: still uses the flat .chat-msg layout (1:1 with the AI, no
    avatars/names needed) — reskin its bubbles to the same palette. ────────── */
 .chat-messages > .chat-msg {
@@ -329,14 +334,12 @@ a.chat-avatar-msg:hover {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Premium hero (chat.php only) ─────────────────────────────────────────── */
-/* Same background treatment as every other page's .topbar (background-color
-   + images/backgrounds/header-bg.png) — only the shape changes here: an
-   inset rounded 28px card instead of edge-to-edge. */
+/* Keep the hero flush with the shared page shell, including at phone widths. */
 .chat-hero {
-    width: min(1280px, 100%);
-    margin: 16px auto 0;
-    border-radius: 28px;
-    padding: 30px 34px;
+    width: 100%;
+    margin: 0;
+    border-radius: 0;
+    padding: 0;
 }
 
 /* ── AI Assistant card ─────────────────────────────────────────────────────── */
@@ -999,8 +1002,8 @@ a.chat-list-row:has(.notif-badge) {
 
 @media (max-width: 640px) {
     .chat-hero {
-        padding: 22px 20px;
-        border-radius: 20px;
+        padding: 0;
+        border-radius: 0;
     }
 
     .chat-ai-card {
@@ -1014,5 +1017,54 @@ a.chat-list-row:has(.notif-badge) {
 
     .chat-thread-search {
         padding: 8px 14px;
+    }
+}
+
+/* The landing-page feature cards need a deliberate mobile hierarchy rather
+   than the desktop flex row wrapping into progressively narrower columns. */
+@media (max-width: 600px) {
+    .chat-ai-card {
+        display: grid;
+        grid-template-columns: 56px minmax(0, 1fr);
+        grid-template-rows: auto auto auto;
+        align-items: center;
+        column-gap: 16px;
+        row-gap: 14px;
+        padding: 20px;
+    }
+
+    .chat-ai-card-icon {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .chat-ai-card-info {
+        display: contents;
+    }
+
+    .chat-ai-card-title {
+        grid-column: 2;
+        grid-row: 1;
+        min-width: 0;
+        flex-wrap: wrap;
+    }
+
+    .chat-ai-card-info p {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        min-width: 0;
+        margin: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .chat-ai-card-btn {
+        grid-column: 1 / -1;
+        grid-row: 3;
+        width: 100%;
+        min-width: 0;
+        min-height: 44px;
+        justify-content: center;
+        text-align: center;
+        white-space: normal;
     }
 }

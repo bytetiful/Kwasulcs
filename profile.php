@@ -39,6 +39,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
 
 <body class="app-body">
     <?php include __DIR__ . '/partials/nav.php'; ?>
+    <section class="app-hero">
     <?php include __DIR__ . '/partials/appheader.php'; ?>
 
     <header class="topbar">
@@ -48,9 +49,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
             <p class="muted">Manage your account.</p>
         </div>
         <div class="topbar-actions">
-            <a class="btn glass btn-go-dashboard" href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
+            <a class="btn glass btn-go-dashboard" href="dashboard"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
         </div>
     </header>
+    </section>
 
     <main class="page">
         <div class="stack">
@@ -72,7 +74,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
 
                 <?php if (empty($user['google_picture'])): ?>
                     <p class="helper" style="margin-top:18px;">
-                        <a href="settings.php">Connect a Google account</a> in Settings to add a profile photo.
+                        <a href="settings">Connect a Google account</a> in Settings to add a profile photo.
                     </p>
                 <?php endif; ?>
 

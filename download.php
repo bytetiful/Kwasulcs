@@ -53,13 +53,19 @@ if ($type === 'document') {
     }
 }
 
-if (!$resource || !$filePath || !$courseId || !enrolled_or_staff_access($courseId, $user)) {
+// course_access_authorized() — materials (this endpoint) are available to
+// any AUTHORIZED user (own-department browsing, or an existing enrollment
+// elsewhere), not just registered ones — registration is reserved for the
+// AI features (chatbot/quiz), not ordinary material access. See its
+// docblock in config.php for the full course_access_authorized() vs.
+// enrolled_or_staff_access() vs. registered_or_staff_ai_access() distinction.
+if (!$resource || !$filePath || !$courseId || !course_access_authorized($courseId, $user)) {
     http_response_code(403);
     error_log("[LCS] download.php Forbidden: type=$type id=$id user={$user['id']} course=$courseId "
         . 'resource=' . ($resource ? 'ok' : 'none')
         . ' filePath=' . ($filePath ? 'ok' : 'none')
         . ' courseId=' . ($courseId ?: 'none')
-        . ' access=' . (enrolled_or_staff_access($courseId, $user) ? 'ok' : 'denied'));
+        . ' access=' . (course_access_authorized($courseId, $user) ? 'ok' : 'denied'));
     exit('Forbidden');
 }
 
@@ -543,8 +549,7 @@ if ($inline && !$canInline) {
                 </div>
                 <div class="topbar-actions">
                     <a class="btn glass" href="download.php?type=<?php echo h($type); ?>&id=<?php echo $id; ?>" target="_blank"><i class="bi bi-download icon"></i> Download</a>
-                    <a class="btn glass" href="course.php?id=<?php echo (int)$courseId; ?>">← Back to Course</a>
-                    <button class="theme-toggle" role="switch" onclick="toggleTheme()" title="Dark mode"></button>
+                    <a class="btn glass" href="course?id=<?php echo (int)$courseId; ?>">← Back to Course</a>
                 </div>
             </header>
             <main class="page">
@@ -621,8 +626,7 @@ if ($inline && !$canInline) {
                 <p class="muted"><?php echo $typeLabel; ?> · <?php echo $sizeLabel; ?></p>
             </div>
             <div class="topbar-actions">
-                <a class="btn glass" href="course.php?id=<?php echo (int)$courseId; ?>">← Back to Course</a>
-                <button class="theme-toggle" role="switch" onclick="toggleTheme()" title="Dark mode"></button>
+                <a class="btn glass" href="course?id=<?php echo (int)$courseId; ?>">← Back to Course</a>
             </div>
         </header>
         <main class="page">
@@ -861,8 +865,7 @@ if ($inline && $canInline) {
                         target="_blank">
                         ⬇ Download
                     </a>
-                    <a class="pdf-btn bk" href="course.php?id=<?php echo (int)$courseId; ?>">← Back to Course</a>
-                    <button class="theme-toggle" role="switch" onclick="toggleTheme()" title="Dark mode"></button>
+                    <a class="pdf-btn bk" href="course?id=<?php echo (int)$courseId; ?>">← Back to Course</a>
                 </div>
             </div>
 

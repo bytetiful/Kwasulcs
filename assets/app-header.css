@@ -1,0 +1,20 @@
+/* One green header treatment across the portal; pages keep their own actions. */
+.app-hero,.app-header { background:#00672f url('images/backgrounds/header-bg.png') center/cover no-repeat; color:#fff; }
+.app-header { justify-content:flex-end; border:0; padding:22px 30px 12px; }
+.app-header-actions { margin-left:auto; }
+.app-header .app-icon-btn { background:#ffffff16; color:#fff; }
+.app-header .app-icon-badge { display:inline-flex; align-items:center; justify-content:center; min-width:17px; height:17px; padding:0 4px; border-radius:999px; background:#dc2626; color:#fff; font-size:10px; line-height:1; font-weight:700; }
+.app-header .app-profile-btn { color:#fff; }
+.app-header .app-profile-btn > .bi-chevron-down { color:#fff; font-size:14px; opacity:1; }
+.app-header .app-profile-btn:hover,.app-header .app-profile-btn[aria-expanded="true"] { background:#ffffff20; color:#fff; }
+.app-header .app-header-theme-toggle { background-color:#ffffff30; }
+.app-hero>.app-header,.app-hero>.topbar { background:transparent; }
+.app-hero>.topbar { padding:24px 34px 30px; }
+.app-hero>.topbar .eyebrow { display:none; }
+.app-hero>.topbar h1 { font-size:clamp(26px,2.7vw,40px); line-height:1.2; margin:0 0 8px; overflow-wrap:anywhere; }
+@media(max-width:768px) {
+    .app-header { padding:max(14px,env(safe-area-inset-top)) max(18px,env(safe-area-inset-right)) 8px max(18px,env(safe-area-inset-left)); }
+    .app-hero>.topbar { padding:22px 20px 26px; }
+    .app-hero>.topbar h1 { font-size:26px; }
+    .bottom-nav .nav-item[href="chat.php"] .nav-label { font-size:11px; line-height:1.1; text-align:center; }
+}

@@ -5,51 +5,7 @@ require_login();
 $user = current_user();
 $role = $user['role'];
 
-// ── Auto-fire pending WEB notifications on page load (no cron needed) ────────
-// Email sending was removed from this page-render path — it used to call
-// send_mail() synchronously here, which could block dashboard rendering on
-// a slow/blocked SMTP connection. Web notifications stay here (fast,
-// DB-only, no network call). Email firing now happens via notify_poll.php's
-// background poll (async, doesn't block page paint) and notify_cron.php
-// (a real cron job, if configured on the host) — both cover the exact same
-// due-reminder rows via the same atomic-claim pattern, so nothing is lost.
-try {
-    $dueChk = db()->prepare("SELECT COUNT(*) FROM calendar_notifications WHERE scheduled_at <= NOW() AND sent_web=0");
-    $dueChk->execute();
-    if ((int)$dueChk->fetchColumn() > 0) {
-        $cronNow2 = date('Y-m-d H:i:s');
-        $cronStmt2 = db()->prepare("
-            SELECT cn.id AS notif_id, cn.event_id, cn.user_id, cn.sent_web,
-                   ce.title AS event_title, ce.event_type, ce.start_datetime, ce.location, ce.description,
-                   ce.notify_web AS ev_notify_web,
-                   c.code AS course_code,
-                   u.pref_web_notifications
-            FROM calendar_notifications cn
-            JOIN calendar_events ce ON ce.id = cn.event_id
-            JOIN users u ON u.id = cn.user_id
-            LEFT JOIN courses c ON c.id = ce.course_id
-            WHERE cn.scheduled_at <= ? AND cn.sent_web = 0
-            LIMIT 50
-        ");
-        $cronStmt2->execute([$cronNow2]);
-        foreach ($cronStmt2->fetchAll() as $cr) {
-            // Claim the row atomically before acting — prevents the same
-            // notification firing more than once if two requests (open tabs,
-            // overlapping page loads, the background poll, etc.) hit this
-            // block within the same brief window.
-            if (!$cr['sent_web'] && $cr['ev_notify_web'] && $cr['pref_web_notifications']) {
-                $claimWeb2 = db()->prepare('UPDATE calendar_notifications SET sent_web=1 WHERE id=? AND sent_web=0');
-                $claimWeb2->execute([$cr['notif_id']]);
-                if ($claimWeb2->rowCount() > 0) {
-                    $msg2 = reminder_short_message($cr);
-                    db()->prepare('INSERT IGNORE INTO web_notifications (user_id, event_id, message) VALUES (?,?,?)')->execute([$cr['user_id'], $cr['event_id'], $msg2]);
-                }
-            }
-        }
-    }
-} catch (\Throwable $e) { /* silent fail */
-}
-
+// Scheduled reminders are dispatched only by the CLI worker.
 
 $allCourses = courses_for_user($user);
 
@@ -93,6 +49,8 @@ $typeColors = [
     'personal' => '#059669',
     'general'  => '#0891b2',
 ];
+require_once __DIR__ . '/includes/pwa.php';
+pwa_mark_cacheable_page((int)$user['id']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -102,21 +60,22 @@ $typeColors = [
     <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon/favicon-16x16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/favicon/apple-touch-icon.png">
     <?php $pageTitle = 'Dashboard';
-    $extraCss = ['assets/calendar.css'];
+    $extraCss = ['assets/calendar.css', 'assets/dashboard-header.css'];
     include __DIR__ . '/partials/head.php'; ?>
 </head>
 
-<body class="app-body">
+<body class="app-body dashboard-page">
     <?php include __DIR__ . '/partials/nav.php'; ?>
-    <?php include __DIR__ . '/partials/appheader.php'; ?>
-
-    <header class="topbar">
-        <div>
-            <div class="eyebrow"><?php echo brand_logo(); ?> KWASU LCS</div>
+    <section class="dashboard-hero" aria-label="Welcome">
+        <?php include __DIR__ . '/partials/appheader.php'; ?>
+        <div class="dashboard-welcome">
+        <div class="dashboard-welcome-copy">
             <h1>Welcome, <?php echo h($user['full_name']); ?></h1>
-            <p class="muted"><?php echo h(ucfirst($role)); ?> portal</p>
+            <p class="dashboard-role"><?php echo h(ucfirst($role)); ?> portal</p>
+            <p class="dashboard-description"><?php echo $role === 'lecturer' ? 'Manage your courses, engage with students, and stay updated all in one place.' : ($role === 'admin' ? 'Manage your learning community and stay updated all in one place.' : 'Explore your courses, connect with your lecturers, and stay on top of your learning.'); ?></p>
         </div>
-    </header>
+        </div>
+    </section>
 
     <main class="page">
         <!-- ── Stats row ─────────────────────────────────────────────────────────── 
@@ -172,7 +131,7 @@ $typeColors = [
                                 All courses in the system.
                             <?php endif; ?>
                         </p>
-                        <a class="btn tiny secondary" href="courses.php">View all</a>
+                        <a class="btn tiny secondary" href="courses">View all</a>
                     </div>
                     <div class="course-slider-wrap">
                         <?php if (count($courses) > 2): ?>
@@ -180,7 +139,7 @@ $typeColors = [
                         <?php endif; ?>
                         <section class="course-slider" id="courseSlider">
                             <?php foreach ($courses as $course): ?>
-                                <a class="course-card" href="course.php?id=<?php echo (int)$course['id']; ?>" data-pattern="<?php echo $coursePatterns[(int) $course['id']] ?? 1; ?>" style="--course-color:<?php echo h($course['color'] ?: '#2563eb'); ?>;">
+                                <a class="course-card" href="course?id=<?php echo (int)$course['id']; ?>" data-pattern="<?php echo $coursePatterns[(int) $course['id']] ?? 1; ?>" style="--course-color:<?php echo h($course['color'] ?: '#2563eb'); ?>;">
                                     <span class="course-code"><?php echo h($course['code']); ?></span>
                                     <h3><?php echo h($course['title']); ?></h3>
                                 </a>
@@ -188,7 +147,7 @@ $typeColors = [
                             <?php if (!$courses): ?>
                                 <p class="muted" style="padding:16px 0;">
                                     <?php echo $role === 'student' ? 'No registered courses yet — ' : 'No courses yet.'; ?>
-                                    <?php if ($role === 'student'): ?><a href="courses.php" style="color:var(--primary-dark);">browse courses →</a><?php endif; ?>
+                                    <?php if ($role === 'student'): ?><a href="courses" style="color:var(--primary-dark);">browse courses →</a><?php endif; ?>
                                 </p>
                             <?php endif; ?>
                         </section>
@@ -212,18 +171,18 @@ $typeColors = [
                                 <p class="muted panel-subtitle">Don't miss what's coming up.</p>
                             </div>
                         </div>
-                        <a class="btn tiny secondary pill-cta" href="calendar.php">View calendar <i class="bi bi-chevron-right"></i></a>
+                        <a class="btn tiny secondary pill-cta" href="calendar">View calendar <i class="bi bi-chevron-right"></i></a>
                     </div>
                     <?php if (!$upcomingEvents): ?>
                         <p class="muted" style="padding:12px 0;font-size:14px;">
                             No upcoming events.
-                            <a href="calendar.php" style="color:var(--primary-dark);">Add one →</a>
+                            <a href="calendar" style="color:var(--primary-dark);">Add one →</a>
                         </p>
                     <?php endif; ?>
                     <?php foreach ($upcomingEvents as $ev):
                         $color = $typeColors[$ev['event_type']] ?? '#64748b';
                     ?>
-                        <a class="dash-event-row" href="calendar.php" style="border-left-color:<?php echo $color; ?>;">
+                        <a class="dash-event-row" href="calendar" style="border-left-color:<?php echo $color; ?>;">
                             <div class="dash-event-date" style="background:<?php echo $color; ?>18;">
                                 <span class="udate-day" style="color:<?php echo $color; ?>;"><?php echo date('d', strtotime($ev['start_datetime'])); ?></span>
                                 <span class="udate-mon" style="color:<?php echo $color; ?>;"><?php echo date('M', strtotime($ev['start_datetime'])); ?></span>
@@ -274,7 +233,7 @@ $typeColors = [
                                 <p class="muted panel-subtitle">Stay updated with important activities.</p>
                             </div>
                         </div>
-                        <a class="btn tiny secondary pill-cta" href="notifications.php">View all <i class="bi bi-chevron-right"></i></a>
+                        <a class="btn tiny secondary pill-cta" href="notifications">View all <i class="bi bi-chevron-right"></i></a>
                     </div>
                     <?php if (!$recentNotifs): ?>
                         <p class="muted" style="padding:12px 0;font-size:14px;">No notifications yet.</p>
@@ -317,15 +276,23 @@ $typeColors = [
 
     </main>
     <script>
-        // ── Background poll for due notifications ────────────────────────────────────
-        // Runs silently every 60s so reminders fire close to their scheduled time
-        // even if you just leave this tab open, instead of needing a manual refresh.
-        setInterval(() => {
-            fetch('notify_poll.php', {
-                method: 'GET',
-                cache: 'no-store'
-            }).catch(() => {});
-        }, 60000);
+        // Retrieval only: the independent CLI worker owns all scheduled dispatch.
+        async function refreshNotificationCount() {
+            try {
+                const response = await fetch('notify_poll.php', {cache:'no-store'});
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!data.ok) return;
+                const link = document.querySelector('.app-header a[href="notifications"]');
+                if (link) {
+                    let badge = link.querySelector('.notif-badge');
+                    if (!badge) { badge = document.createElement('span'); badge.className='notif-badge app-icon-badge'; link.append(badge); }
+                    badge.textContent = String(data.unread); badge.hidden = data.unread === 0;
+                }
+                document.dispatchEvent(new CustomEvent('lcs:notifications', {detail:data}));
+            } catch (_) { /* Next retrieval retries; it cannot send anything. */ }
+        }
+        setInterval(refreshNotificationCount, 60000);
     </script>
 </body>
 

@@ -1,0 +1,30 @@
+/* Preserve Quiz layout while using the same surface/text tokens as LCS. */
+.quiz-shell :is(.setup-card,.quiz-loading,.quiz-progress,.question-card,.results-card,.history-card),
+.quiz-shell .score-circle::before { background:var(--panel); color:var(--text); }
+.quiz-shell :is(.scope-tab,.type-tab,.mcq-option,.short-input,select) { background:var(--panel); color:var(--text); border-color:var(--line); }
+.quiz-shell :is(.progress-label,.q-eyebrow,.opt-letter,.image-upload-label) { color:var(--muted); }
+[data-theme=dark] .quiz-shell .count-val { color:#86efac; }
+.quiz-shell :is(.marks-awarded-line,.breakdown-title,.breakdown-item-head) { color:var(--text); }
+.quiz-shell :is(input,textarea)::placeholder { color:var(--muted); opacity:1; }
+.quiz-shell :is(button,input,select,textarea):focus-visible { outline:3px solid #16a34a; outline-offset:3px; }
+.quiz-shell .mcq-option { min-height:48px; }
+.quiz-shell .model-answer { background:#f0fdf4; }
+.quiz-shell .mcq-option:disabled { opacity:1; cursor:default; }
+.quiz-shell :is(.scope-tab.active,.type-tab.active,.mcq-option.selected,.mcq-option:hover:not(.locked)) { background:#f0fdf4; color:#166534; border-color:#16a34a; }
+.quiz-shell .mcq-option.correct { background:#dcfce7; color:#166534; border-color:#16a34a; }
+.quiz-shell .mcq-option.wrong { background:#fee2e2; color:#991b1b; border-color:#dc2626; }
+[data-theme=dark] .quiz-shell :is(.scope-tab.active,.type-tab.active,.mcq-option.selected,.mcq-option.correct,.mcq-option:hover:not(.locked),.explanation-box) { background:#163b28; color:#bbf7d0; }
+[data-theme=dark] .quiz-shell .mcq-option.wrong { background:#451c25; color:#fecaca; }
+[data-theme=dark] .quiz-shell :is(.opt-letter,.breakdown-box) { background:var(--soft); border-color:var(--line); }
+[data-theme=dark] .quiz-shell :is(.history-item,.breakdown-item) { border-color:var(--line); }
+[data-theme=dark] .quiz-shell :is(.marks-awarded-line strong,.bd-yes) { color:#86efac; }
+[data-theme=dark] .quiz-shell .bd-no { color:#fca5a5; }
+[data-theme=dark] .quiz-shell .model-answer { background:#163b28; color:#bbf7d0; }
+@media(max-width:600px) {
+    .quiz-shell .type-tabs { flex-wrap:wrap; }
+    .quiz-shell .type-tab { flex-basis:calc(50% - 8px); }
+    .quiz-shell :is(.setup-card,.results-card,.history-card) { padding:20px 16px; }
+    .quiz-shell .count-row input { min-width:0; }
+    .quiz-shell .history-item { flex-wrap:wrap; gap:8px; }
+}
+@media(prefers-reduced-motion:reduce) { .quiz-shell * { transition:none !important; } }

@@ -1,294 +1,20 @@
 <?php
-require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/calendar.php';
 require_login();
+$user=current_user();
+$role=$user['role'];
+$isStaff=in_array($role,['admin','lecturer'],true);
+$year=max(1970,min(2100,(int)($_GET['y']??date('Y'))));
+$month=max(1,min(12,(int)($_GET['m']??date('n'))));
+$monthStart=mktime(0,0,0,$month,1,$year);
+$monthEnd=mktime(23,59,59,$month,(int)date('t',$monthStart),$year);
+$monthLabel=date('F Y',$monthStart);
+$realTodayYear=(int)date('Y'); $realTodayMonth=(int)date('n'); $todayFull=date('Y-m-d');
+$filterCourseId=(int)($_GET['course']??0);
+$myCourses=calendar_courses_for($user);
+$allEvents=calendar_events_for_window($user,strtotime('-7 days',$monthStart),strtotime('+14 days',$monthEnd),$filterCourseId);
 
-$user    = current_user();
-$role    = $user['role'];
-$isStaff = in_array($role, ['admin', 'lecturer'], true);
-
-// ── Month navigation ──────────────────────────────────────────────────────────
-$year  = (int) ($_GET['y'] ?? date('Y'));
-$month = (int) ($_GET['m'] ?? date('n'));
-if ($month < 1) {
-    $month = 12;
-    $year--;
-}
-if ($month > 12) {
-    $month = 1;
-    $year++;
-}
-
-$monthStart   = mktime(0, 0, 0, $month, 1, $year);
-$monthEnd     = mktime(23, 59, 59, $month, (int) date('t', $monthStart), $year);
-$monthLabel   = date('F Y', $monthStart);
-$firstWeekday = (int) date('w', $monthStart);
-$daysInMonth  = (int) date('t', $monthStart);
-
-// ── FIX: today only highlights when viewing the actual current month/year ────
-$realToday      = (int)  date('j');
-$realTodayMonth = (int)  date('n');
-$realTodayYear  = (int)  date('Y');
-$todayFull      = date('Y-m-d');
-
-// ── Course filter ─────────────────────────────────────────────────────────────
-$filterCourseId = (int) ($_GET['course'] ?? 0);
-
-// ── Load courses the user can see ─────────────────────────────────────────────
-// Department-scoped for admins too (Task 19 Part B) — an admin no longer
-// sees every course system-wide, only their own department's, same as the
-// admin.php course-management view.
-if ($role === 'admin') {
-    $s = db()->prepare('SELECT id, code, title FROM courses WHERE department_id = ? ORDER BY code');
-    $s->execute([$user['department_id'] ?? 0]);
-    $myCourses = $s->fetchAll();
-} elseif ($role === 'lecturer') {
-    $s = db()->prepare('SELECT id, code, title FROM courses WHERE lecturer_id = ? ORDER BY code');
-    $s->execute([$user['id']]);
-    $myCourses = $s->fetchAll();
-} else {
-    $s = db()->prepare('
-        SELECT c.id, c.code, c.title FROM courses c
-        JOIN enrollments e ON e.course_id = c.id
-        WHERE e.student_id = ?
-        ORDER BY c.code
-    ');
-    $s->execute([$user['id']]);
-    $myCourses = $s->fetchAll();
-}
-$myCourseIds = array_column($myCourses, 'id');
-
-// ── Load events for the visible month ────────────────────────────────────────
-$startStr     = date('Y-m-d 00:00:00', $monthStart);
-$endStr       = date('Y-m-d 23:59:59', $monthEnd);
-$whereClauses = [];
-$params       = [];
-
-// "global" events are department-wide, not literally system-wide (Task 19
-// Part B — see the matching note in calendar_save.php's collect_audience()
-// for why) — a viewer only sees a global event if its CREATOR belongs to
-// their own department, via the cu (creating user) join added to the main
-// query below.
-$whereClauses[] = "(e.scope = 'global' AND cu.department_id = ?)";
-$params[]       = $user['department_id'] ?? 0;
-
-if ($myCourseIds) {
-    $inPH = implode(',', array_fill(0, count($myCourseIds), '?'));
-    if ($filterCourseId > 0 && in_array($filterCourseId, $myCourseIds, true)) {
-        $whereClauses[] = "(e.scope = 'course' AND e.course_id = ?)";
-        $params[]       = $filterCourseId;
-    } else {
-        $whereClauses[] = "(e.scope = 'course' AND e.course_id IN ($inPH))";
-        $params         = array_merge($params, $myCourseIds);
-    }
-}
-
-$whereClauses[] = "(e.scope = 'personal' AND e.created_by = ?)";
-$params[]       = $user['id'];
-
-$whereSQL = implode(' OR ', $whereClauses);
-
-// For recurring events: the original start may be months in the past, but
-// occurrences still fall in this month. We fetch them with a looser date
-// filter — expand_recurring_events() will then generate the correct dates.
-// Non-recurring events still use the tight window for performance.
-$evtStmt = db()->prepare("
-    SELECT e.*, c.code AS course_code
-    FROM calendar_events e
-    LEFT JOIN courses c ON c.id = e.course_id
-    LEFT JOIN users cu ON cu.id = e.created_by
-    WHERE ($whereSQL)
-      AND (
-          -- Non-recurring: must overlap with this month
-          (e.is_recurring = 0 AND e.start_datetime <= ? AND e.end_datetime >= ?)
-          OR
-          -- Recurring: started before month end AND recurrence hasn't ended before month start
-          (e.is_recurring = 1 AND e.start_datetime <= ?
-           AND (e.recurrence_end_date IS NULL OR e.recurrence_end_date >= ?))
-      )
-    ORDER BY e.start_datetime ASC
-");
-$evtStmt->execute(array_merge($params, [
-    $endStr,
-    $startStr,  // non-recurring window
-    $endStr,
-    $startStr,  // recurring window
-]));
-$allEvents = $evtStmt->fetchAll();
-
-// ── Expand recurring events into occurrences within this month ────────────────
-//
-// KEY FIX: Instead of walking from the original start (which could be months
-// ago, wasting iterations), we JUMP directly to the first occurrence that
-// falls within or just before the target month window, then walk forward.
-// This makes biweekly and monthly work correctly across any number of months.
-//
-function expand_recurring_events(array $events, int $monthStart, int $monthEnd): array
-{
-    $expanded = [];
-
-    foreach ($events as $ev) {
-        // Non-recurring: pass through as-is
-        if (!$ev['is_recurring'] || !$ev['recurrence_rule']) {
-            $expanded[] = $ev;
-            continue;
-        }
-
-        $origStart = strtotime($ev['start_datetime']);
-        $origEnd   = strtotime($ev['end_datetime']);
-        $duration  = $origEnd - $origStart;
-
-        // Hard limit: don't show occurrences past recurrence_end_date
-        $recurrEnd = $ev['recurrence_end_date']
-            ? strtotime($ev['recurrence_end_date'] . ' 23:59:59')
-            : PHP_INT_MAX;
-
-        // ── Compute first cursor position at or before monthStart ─────────────
-        // Rather than walking all the way from origStart, we calculate how many
-        // intervals fit between origStart and monthStart and jump there.
-        if ($ev['recurrence_rule'] === 'monthly') {
-            // Monthly: same day-of-month, advance month-by-month
-            // Find the month/year of the first occurrence that could hit our window
-            $origDay  = (int) date('j', $origStart);
-            $origH    = (int) date('H', $origStart);
-            $origI    = (int) date('i', $origStart);
-
-            $viewYear  = (int) date('Y', $monthStart);
-            $viewMonth = (int) date('n', $monthStart);
-            $origYear  = (int) date('Y', $origStart);
-            $origMonth = (int) date('n', $origStart);
-
-            // How many months from origin to the start of the view window?
-            $monthsElapsed = ($viewYear - $origYear) * 12 + ($viewMonth - $origMonth);
-            // Jump to that month (or the one before to be safe)
-            $jumpMonths = max(0, $monthsElapsed - 1);
-            $startYear  = $origYear  + intdiv($origMonth - 1 + $jumpMonths, 12);
-            $startMonth = (($origMonth - 1 + $jumpMonths) % 12) + 1;
-            $cursor = mktime($origH, $origI, 0, $startMonth, $origDay, $startYear);
-        } elseif (in_array($ev['recurrence_rule'], ['daily', 'weekly', 'biweekly'])) {
-            $stepSecs = match ($ev['recurrence_rule']) {
-                'daily'    => 86400,
-                'weekly'   => 604800,
-                'biweekly' => 1209600,
-            };
-            if ($origStart >= $monthStart) {
-                // Origin is this month or future — start from origin
-                $cursor = $origStart;
-            } else {
-                // Jump: how many full intervals fit between origStart and monthStart?
-                $elapsed  = $monthStart - $origStart;
-                $steps    = (int) floor($elapsed / $stepSecs);
-                // Step back one to make sure we don't miss a boundary occurrence
-                $cursor   = $origStart + max(0, $steps - 1) * $stepSecs;
-            }
-        } else {
-            $cursor = $origStart;
-        }
-
-        // ── Walk forward generating occurrences that overlap the month ────────
-        $safety = 0;
-        while ($cursor <= $monthEnd && $cursor <= $recurrEnd && $safety++ < 500) {
-            $occEnd = $cursor + $duration;
-
-            // Include if this occurrence overlaps the visible month window
-            if ($occEnd >= $monthStart && $cursor <= $monthEnd && $cursor >= $origStart) {
-                $occ = $ev;
-                $occ['start_datetime'] = date('Y-m-d H:i:s', $cursor);
-                $occ['end_datetime']   = date('Y-m-d H:i:s', $occEnd);
-                $occ['_is_occurrence'] = true;
-                $expanded[] = $occ;
-            }
-
-            // Advance to next occurrence
-            if ($ev['recurrence_rule'] === 'monthly') {
-                $nextM = (int)date('n', $cursor) + 1;
-                $nextY = (int)date('Y', $cursor);
-                if ($nextM > 12) {
-                    $nextM = 1;
-                    $nextY++;
-                }
-                $cursor = mktime(
-                    (int)date('H', $origStart),
-                    (int)date('i', $origStart),
-                    0,
-                    $nextM,
-                    (int)date('j', $origStart),
-                    $nextY
-                );
-            } else {
-                $stepSecs = match ($ev['recurrence_rule']) {
-                    'daily'    => 86400,
-                    'weekly'   => 604800,
-                    'biweekly' => 1209600,
-                    default    => 604800,
-                };
-                $cursor += $stepSecs;
-            }
-        }
-    }
-
-    usort($expanded, fn($a, $b) => strtotime($a['start_datetime']) <=> strtotime($b['start_datetime']));
-    return $expanded;
-}
-
-$allEvents = expand_recurring_events($allEvents, $monthStart, $monthEnd);
-
-// Index events by day for grid rendering
-$eventsByDay = [];
-foreach ($allEvents as $ev) {
-    $evStart = max(strtotime($ev['start_datetime']), $monthStart);
-    $evEnd   = min(strtotime($ev['end_datetime']),   $monthEnd);
-    for ($d = (int) date('j', $evStart); $d <= (int) date('j', $evEnd); $d++) {
-        $eventsByDay[$d][] = $ev;
-    }
-}
-
-// ── Auto-fire pending WEB notifications on page load ──────────────────────────
-// Email sending was removed from this page-render path — it used to call
-// send_mail() synchronously here, which could block calendar rendering on a
-// slow/blocked SMTP connection. Web notifications stay here (fast, DB-only,
-// no network call). Email firing now happens via notify_poll.php's
-// background poll (async, doesn't block page paint) and notify_cron.php (a
-// real cron job, if configured on the host) — both cover the exact same due
-// rows via the same atomic-claim pattern, so nothing is lost.
-try {
-    $dueCount = db()->prepare("
-        SELECT COUNT(*) FROM calendar_notifications
-        WHERE scheduled_at <= NOW() AND sent_web = 0
-    ");
-    $dueCount->execute();
-    if ((int)$dueCount->fetchColumn() > 0) {
-        $cronNow = date('Y-m-d H:i:s');
-        $cronStmt = db()->prepare("
-            SELECT cn.id AS notif_id, cn.event_id, cn.user_id, cn.sent_web,
-                   ce.title AS event_title, ce.event_type, ce.start_datetime, ce.location, ce.description,
-                   ce.notify_web AS ev_notify_web,
-                   c.code AS course_code
-            FROM calendar_notifications cn
-            JOIN calendar_events ce ON ce.id = cn.event_id
-            JOIN users u ON u.id = cn.user_id
-            LEFT JOIN courses c ON c.id = ce.course_id
-            WHERE cn.scheduled_at <= ? AND cn.sent_web = 0
-            ORDER BY cn.scheduled_at ASC LIMIT 50
-        ");
-        $cronStmt->execute([$cronNow]);
-        foreach ($cronStmt->fetchAll() as $cronRow) {
-            // Claim FIRST, then act — an UPDATE that only succeeds if
-            // sent_web is still 0 means only ONE concurrent request (two
-            // tabs, a page load racing the background poll, etc.) can ever
-            // win; the other's UPDATE affects 0 rows and correctly skips.
-            if (!$cronRow['sent_web'] && $cronRow['ev_notify_web']) {
-                $claimWeb = db()->prepare('UPDATE calendar_notifications SET sent_web = 1 WHERE id = ? AND sent_web = 0');
-                $claimWeb->execute([$cronRow['notif_id']]);
-                if ($claimWeb->rowCount() > 0) {
-                    $cronMsg = reminder_short_message($cronRow);
-                    db()->prepare('INSERT IGNORE INTO web_notifications (user_id, event_id, message) VALUES (?,?,?)')
-                        ->execute([$cronRow['user_id'], $cronRow['event_id'], $cronMsg]);
-                }
-            }
-        }
-    }
-} catch (\Throwable $e) { /* silent fail — don't break the page */
-}
+// Scheduled reminders are dispatched only by the CLI worker.
 
 // ── Prev/Next month links ─────────────────────────────────────────────────────
 $prevM = $month === 1  ? 12 : $month - 1;
@@ -301,9 +27,9 @@ $typeColors = [
     'lecture'  => '#2563eb',
     'tutorial' => '#7c3aed',
     'exam'     => '#dc2626',
-    'test'     => '#ea580c',
+    'assignment_test' => '#ea580c',
     'personal' => '#059669',
-    'general'  => '#0891b2',
+    'general'  => '#64748b',
 ];
 
 // ── Flash messages from redirects ─────────────────────────────────────────────
@@ -312,7 +38,9 @@ $flashErr = $_SESSION['cal_error'] ?? '';
 unset($_SESSION['cal_flash'], $_SESSION['cal_error']);
 
 // ── Upcoming events for the sidebar card ──────────────────────────────────────
-$upcomingForSidebar = upcoming_events_for($user, 20);
+// Upcoming agenda uses the same scoped occurrence feed as the main calendar.
+require_once __DIR__ . '/includes/pwa.php';
+pwa_mark_cacheable_page((int)$user['id']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -322,7 +50,7 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
     <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon/favicon-16x16.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/favicon/apple-touch-icon.png">
     <?php $pageTitle = 'Calendar';
-    $extraCss = ['assets/calendar.css'];
+    $extraCss = ['assets/calendar.css', 'assets/calendar-views.css'];
     include __DIR__ . '/partials/head.php'; ?>
     <style>
         /* ── Time input ──────────────────────────────────────────────────── */
@@ -347,257 +75,10 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
     </style>
 </head>
 
-<body class="app-body">
+<body class="app-body calendar-page">
     <?php include __DIR__ . '/partials/nav.php'; ?>
-    <?php include __DIR__ . '/partials/appheader.php'; ?>
 
-    <header class="topbar">
-        <div>
-            <div class="eyebrow"><?php echo brand_logo(); ?> KWASU LCS</div>
-            <h1><i class="bi bi-calendar3 icon"></i> Academic Calendar</h1>
-            <p class="muted">
-                <?php if ($filterCourseId > 0): ?>
-                    <?php foreach ($myCourses as $mc): if ((int)$mc['id'] === $filterCourseId): ?>
-                            Showing: <strong><?php echo h($mc['code'] . ' — ' . $mc['title']); ?></strong>
-                    <?php endif;
-                    endforeach; ?>
-                <?php else: ?>
-                    Stay on track with your classes, tutorials, exams and more.
-                <?php endif; ?>
-            </p>
-        </div>
-        <div class="topbar-actions">
-            <a class="btn glass btn-go-dashboard" href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
-        </div>
-    </header>
-
-    <main class="page">
-
-        <?php if ($flashMsg): ?>
-            <div class="alert success"><?php echo h($flashMsg); ?></div>
-        <?php endif; ?>
-        <?php if ($flashErr): ?>
-            <div class="alert error"><?php echo h($flashErr); ?></div>
-        <?php endif; ?>
-
-        <!-- ── Controls ──────────────────────────────────────────────────────────── -->
-        <div class="cal-controls">
-            <div class="cal-nav-group">
-                <a class="cal-nav-btn" href="calendar.php?y=<?php echo $prevY; ?>&m=<?php echo $prevM . $courseParam; ?>" aria-label="Previous month"><i class="bi bi-chevron-left"></i></a>
-                <a class="cal-nav-btn" href="calendar.php?y=<?php echo $nextY; ?>&m=<?php echo $nextM . $courseParam; ?>" aria-label="Next month"><i class="bi bi-chevron-right"></i></a>
-                <a class="cal-today-btn" href="calendar.php<?php echo $courseParam ? '?' . ltrim($courseParam, '&') : ''; ?>">Today</a>
-                <span class="cal-month-label"><?php echo $monthLabel; ?> <i class="bi bi-chevron-down"></i></span>
-            </div>
-
-            <div class="cal-view-toggle" role="tablist" id="calViewToggle">
-                <button type="button" class="cal-view-btn active" data-view="month" role="tab" aria-selected="true"><i class="bi bi-calendar3"></i> Month</button>
-                <button type="button" class="cal-view-btn" data-view="week" role="tab" aria-selected="false"><i class="bi bi-view-list"></i> Week</button>
-                <button type="button" class="cal-view-btn" data-view="day" role="tab" aria-selected="false"><i class="bi bi-calendar-day"></i> Day</button>
-            </div>
-
-            <button class="btn primary cal-add-event-btn" id="btnNewEvent"><i class="bi bi-plus-lg"></i> <?php echo $isStaff ? 'Add Event' : 'Personal Event'; ?></button>
-        </div>
-
-        <div class="cal-legend">
-            <?php foreach ($typeColors as $type => $color): ?>
-                <span class="legend-item">
-                    <span class="legend-dot" style="background:<?php echo $color; ?>"></span>
-                    <span class="legend-label"><?php echo ucfirst($type); ?></span>
-                </span>
-            <?php endforeach; ?>
-        </div>
-
-        <div class="cal-layout">
-            <div class="cal-main">
-                <!-- ── Month grid ────────────────────────────────────────────────────── -->
-                <div class="cal-grid-wrap panel" id="monthView">
-                    <div class="cal-dow-row">
-                        <?php foreach (['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as $dow): ?>
-                            <div class="cal-dow"><?php echo $dow; ?></div>
-                        <?php endforeach; ?>
-                    </div>
-
-                    <div class="cal-days">
-                        <?php for ($b = 0; $b < $firstWeekday; $b++): ?>
-                            <div class="cal-day cal-day--blank"></div>
-                        <?php endfor; ?>
-
-                        <?php for ($d = 1; $d <= $daysInMonth; $d++):
-                            // FIX: only highlight if we're actually viewing the current real month+year
-                            $isToday   = ($d === $realToday && $month === $realTodayMonth && $year === $realTodayYear);
-                            $dayEvents = $eventsByDay[$d] ?? [];
-                            $dateStr   = sprintf('%04d-%02d-%02d', $year, $month, $d);
-                        ?>
-                            <div class="cal-day <?php echo $isToday ? 'cal-day--today' : ''; ?>"
-                                data-date="<?php echo $dateStr; ?>">
-                                <span class="cal-day-num"><?php echo $d; ?></span>
-
-                                <?php foreach (array_slice($dayEvents, 0, 3) as $ev):
-                                    $color = $typeColors[$ev['event_type']] ?? '#64748b';
-                                ?>
-                                    <button class="cal-event-chip"
-                                        style="border-left-color:<?php echo $color; ?>;background:<?php echo $color; ?>18;"
-                                        data-evid="<?php echo (int)$ev['id']; ?>"
-                                        data-type="<?php echo h($ev['event_type']); ?>"
-                                        title="<?php echo h($ev['title']); ?>">
-                                        <span class="chip-dot" style="background:<?php echo $color; ?>"></span>
-                                        <span class="chip-time"><?php echo date('g:ia', strtotime($ev['start_datetime'])); ?></span>
-                                        <span class="chip-title"><?php echo h($ev['title']); ?></span>
-                                    </button>
-                                <?php endforeach; ?>
-
-                                <?php if (count($dayEvents) > 3): ?>
-                                    <button class="cal-more-chip" data-date="<?php echo $dateStr; ?>">
-                                        +<?php echo count($dayEvents) - 3; ?> more
-                                    </button>
-                                <?php endif; ?>
-
-                                <button class="cal-add-btn" data-date="<?php echo $dateStr; ?>" title="Add event">+</button>
-                            </div>
-                        <?php endfor; ?>
-                    </div>
-                </div>
-
-                <!-- ── Week / Day views (client-side, rendered from ALL_EVENTS) ─────────── -->
-                <div class="cal-grid-wrap panel" id="weekView" hidden>
-                    <div class="cal-dow-row" id="weekDowRow"></div>
-                    <div class="cal-week-body" id="weekBody"></div>
-                </div>
-                <div class="panel" id="dayView" hidden>
-                    <div class="cal-day-view-header" id="dayViewHeader"></div>
-                    <div class="cal-day-view-body" id="dayViewBody"></div>
-                </div>
-            </div>
-
-            <!-- ── Right sidebar ─────────────────────────────────────────────────────── -->
-            <aside class="cal-sidebar">
-                <div class="panel cal-side-card" id="filtersCard">
-                    <button type="button" class="cal-side-card-head" id="filtersToggle" aria-expanded="true">
-                        <h2>Filters</h2>
-                        <i class="bi bi-chevron-up cal-side-chevron"></i>
-                    </button>
-                    <div class="cal-side-card-body" id="filtersBody">
-                        <!-- Colour key only — not interactive. Course filtering still
-                             works via the deep link from course.php ("Course Calendar"),
-                             it's just no longer exposed as a dropdown here. -->
-                        <div class="cal-color-key">
-                            <?php foreach ($typeColors as $type => $color): ?>
-                                <div class="cal-color-key-item">
-                                    <span class="legend-dot" style="background:<?php echo $color; ?>"></span>
-                                    <?php echo ucfirst($type); ?>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="panel cal-side-card">
-                    <div class="cal-mini-cal">
-                        <div class="cal-mini-cal-head">
-                            <h2><?php echo $monthLabel; ?></h2>
-                            <div class="cal-mini-nav">
-                                <a class="cal-mini-nav-btn" href="calendar.php?y=<?php echo $prevY; ?>&m=<?php echo $prevM . $courseParam; ?>" aria-label="Previous month"><i class="bi bi-chevron-left"></i></a>
-                                <a class="cal-mini-nav-btn" href="calendar.php?y=<?php echo $nextY; ?>&m=<?php echo $nextM . $courseParam; ?>" aria-label="Next month"><i class="bi bi-chevron-right"></i></a>
-                            </div>
-                        </div>
-                        <div class="cal-mini-dow-row">
-                            <?php foreach (['S', 'M', 'T', 'W', 'T', 'F', 'S'] as $dow): ?>
-                                <span><?php echo $dow; ?></span>
-                            <?php endforeach; ?>
-                        </div>
-                        <div class="cal-mini-days">
-                            <?php
-                            // Leading days from the previous month, so the mini grid always fills full weeks
-                            $miniPrevDays = (int) date('t', mktime(0, 0, 0, $prevM, 1, $prevY));
-                            for ($b = $firstWeekday - 1; $b >= 0; $b--):
-                                $pd = $miniPrevDays - $b;
-                            ?>
-                                <a class="cal-mini-day cal-mini-day--muted" href="calendar.php?y=<?php echo $prevY; ?>&m=<?php echo $prevM . $courseParam; ?>"><?php echo $pd; ?></a>
-                            <?php endfor; ?>
-                            <?php for ($d = 1; $d <= $daysInMonth; $d++):
-                                $isToday = ($d === $realToday && $month === $realTodayMonth && $year === $realTodayYear);
-                                $dateStr = sprintf('%04d-%02d-%02d', $year, $month, $d);
-                            ?>
-                                <button type="button" class="cal-mini-day <?php echo $isToday ? 'cal-mini-day--today' : ''; ?>" data-date="<?php echo $dateStr; ?>"><?php echo $d; ?></button>
-                            <?php endfor; ?>
-                            <?php
-                            $miniTrailing = (7 - (($firstWeekday + $daysInMonth) % 7)) % 7;
-                            for ($n = 1; $n <= $miniTrailing; $n++):
-                            ?>
-                                <a class="cal-mini-day cal-mini-day--muted" href="calendar.php?y=<?php echo $nextY; ?>&m=<?php echo $nextM . $courseParam; ?>"><?php echo $n; ?></a>
-                            <?php endfor; ?>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="panel cal-side-card">
-                    <div class="cal-side-card-head cal-side-card-head--static">
-                        <h2>Upcoming Events</h2>
-                        <?php if (count($upcomingForSidebar) > 5): ?>
-                            <button type="button" class="cal-view-all-link" id="upcomingViewAllBtn">View all</button>
-                        <?php endif; ?>
-                    </div>
-                    <div class="cal-side-card-body">
-                        <?php if (!$upcomingForSidebar): ?>
-                            <div class="cal-empty-state">
-                                <svg width="104" height="88" viewBox="0 0 120 100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                    <rect x="20" y="24" width="80" height="66" rx="10" fill="var(--soft)" />
-                                    <rect x="20" y="24" width="80" height="20" rx="10" fill="var(--primary)" />
-                                    <rect x="20" y="34" width="80" height="10" fill="var(--primary)" />
-                                    <rect x="36" y="14" width="6" height="16" rx="3" fill="var(--primary)" />
-                                    <rect x="78" y="14" width="6" height="16" rx="3" fill="var(--primary)" />
-                                    <circle cx="60" cy="66" r="18" fill="#dcfce7" />
-                                    <path d="M52 66l6 6 12-12" stroke="var(--primary)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
-                                </svg>
-                                <p class="muted">No upcoming events yet.</p>
-                            </div>
-                        <?php endif; ?>
-                        <?php foreach ($upcomingForSidebar as $i => $ev):
-                            $color = $typeColors[$ev['event_type']] ?? '#64748b';
-                        ?>
-                            <button type="button"
-                                class="cal-upcoming-card-row<?php echo $i >= 5 ? ' cal-upcoming-card-row--extra' : ''; ?>"
-                                onclick="openEventDetail(<?php echo (int)$ev['id']; ?>)">
-                                <span class="upcoming-date">
-                                    <span class="udate-day"><?php echo date('d', strtotime($ev['start_datetime'])); ?></span>
-                                    <span class="udate-mon"><?php echo date('M', strtotime($ev['start_datetime'])); ?></span>
-                                </span>
-                                <span class="cal-upcoming-card-info">
-                                    <strong><?php echo h($ev['title']); ?></strong>
-                                    <span class="muted cal-upcoming-card-meta">
-                                        <?php if ($ev['course_code']): ?><?php echo h($ev['course_code']); ?> · <?php endif; ?>
-                                    <?php echo date('g:i A', strtotime($ev['start_datetime'])); ?>
-                                    <?php if ($ev['location']): ?> · <i class="bi bi-geo-alt-fill"></i> <?php echo h($ev['location']); ?><?php endif; ?>
-                                    </span>
-                                    <span class="cal-upcoming-card-badges">
-                                        <?php if ($ev['is_recurring']): ?>
-                                            <span class="badge cal-repeat-badge"><i class="bi bi-arrow-repeat"></i> <?php echo h(recurrence_label($ev['recurrence_rule'] ?? '')); ?></span>
-                                        <?php endif; ?>
-                                        <span class="badge ev-badge" style="background:<?php echo $color; ?>22;color:<?php echo $color; ?>;">
-                                            <?php echo ucfirst($ev['event_type']); ?>
-                                        </span>
-                                    </span>
-                                </span>
-                            </button>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-            </aside>
-        </div>
-
-    </main>
-
-    <!-- ══ DETAIL MODAL ══════════════════════════════════════════════════════════ -->
-    <div class="modal-overlay" id="detailOverlay" hidden>
-        <div class="modal-box">
-            <div class="modal-header">
-                <h2 id="detailTitle"></h2>
-                <button class="modal-close" id="closeDetail">✕</button>
-            </div>
-            <div class="modal-body" id="detailBody"></div>
-            <div class="modal-footer" id="detailFooter"></div>
-        </div>
-    </div>
+    <?php include __DIR__ . '/partials/calendar_views.php'; ?>
 
     <!-- ══ CREATE/EDIT MODAL ═════════════════════════════════════════════════════ -->
     <div class="modal-overlay" id="formOverlay" hidden>
@@ -610,7 +91,7 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
                 <form id="eventForm" method="post" action="calendar_save.php" class="form-stack">
                     <input type="hidden" name="event_id" id="fEventId" value="0">
                     <input type="hidden" name="redirect"
-                        value="calendar.php?y=<?php echo $year; ?>&amp;m=<?php echo $month; ?><?php echo $filterCourseId ? '&amp;course=' . $filterCourseId : ''; ?>">
+                        value="calendar?y=<?php echo $year; ?>&amp;m=<?php echo $month; ?><?php echo $filterCourseId ? '&amp;course=' . $filterCourseId : ''; ?>">
 
                     <div class="form-grid-cal">
                         <label>Title <span class="req">*</span>
@@ -723,23 +204,12 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
         </div>
     </div>
 
-    <!-- ══ DAY-VIEW MODAL ════════════════════════════════════════════════════════ -->
-    <div class="modal-overlay" id="dayOverlay" hidden>
-        <div class="modal-box">
-            <div class="modal-header">
-                <h2 id="dayTitle">Events</h2>
-                <button class="modal-close" id="closeDay">✕</button>
-            </div>
-            <div class="modal-body" id="dayBody"></div>
-        </div>
-    </div>
-
     <!-- ══ DATA + JS ═════════════════════════════════════════════════════════════ -->
     <script>
         'use strict';
 
         // ── Data injected from PHP ──────────────────────────────────────────────────
-        const ALL_EVENTS = <?php echo json_encode(array_values($allEvents), JSON_HEX_TAG | JSON_HEX_APOS); ?>;
+        let ALL_EVENTS = <?php echo json_encode(array_values($allEvents), JSON_HEX_TAG | JSON_HEX_APOS); ?>;
         const TYPE_COLORS = <?php echo json_encode($typeColors); ?>;
         const IS_STAFF = <?php echo $isStaff ? 'true' : 'false'; ?>;
         const USER_ID = <?php echo (int)$user['id']; ?>;
@@ -786,65 +256,11 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
 
         // ── Wire close buttons (safe — runs after DOM is ready) ──────────────────
         document.addEventListener('DOMContentLoaded', function() {
-
-            // Close buttons
-            document.getElementById('closeDetail').addEventListener('click', closeModals);
             document.getElementById('closeForm').addEventListener('click', closeModals);
-            document.getElementById('closeDay').addEventListener('click', closeModals);
             document.getElementById('cancelForm').addEventListener('click', closeModals);
-
-            // Click outside modal box to close
-            document.querySelectorAll('.modal-overlay').forEach(ov => {
-                ov.addEventListener('click', e => {
-                    if (e.target === ov) closeModals();
-                });
-            });
-
-            // Escape key
-            document.addEventListener('keydown', e => {
-                if (e.key === 'Escape') closeModals();
-            });
-
-            // ── "+ New Event" header button ────────────────────────────────────────
-            document.getElementById('btnNewEvent').addEventListener('click', () => openNewEvent(''));
-
-            // ── Day cell: "+" add button ───────────────────────────────────────────
-            document.querySelectorAll('.cal-add-btn').forEach(btn => {
-                btn.addEventListener('click', e => {
-                    e.stopPropagation();
-                    openNewEvent(btn.dataset.date);
-                });
-            });
-
-            // ── Day cell: event chip click ─────────────────────────────────────────
-            document.querySelectorAll('.cal-event-chip').forEach(btn => {
-                btn.addEventListener('click', e => {
-                    e.stopPropagation();
-                    openEventDetail(Number(btn.dataset.evid));
-                });
-            });
-
-            // ── Day cell: "+N more" chip ───────────────────────────────────────────
-            document.querySelectorAll('.cal-more-chip').forEach(btn => {
-                btn.addEventListener('click', () => openDayView(btn.dataset.date));
-            });
-
-            // ── Upcoming list: row click for detail ───────────────────────────────
-            document.querySelectorAll('.upcoming-item[data-evid]').forEach(row => {
-                row.style.cursor = 'pointer';
-                row.addEventListener('click', e => {
-                    // Don't trigger if clicking edit/delete buttons
-                    if (e.target.closest('button, form')) return;
-                    openEventDetail(Number(row.dataset.evid));
-                });
-            });
-
-            // ── Upcoming list: edit buttons ───────────────────────────────────────
-            document.querySelectorAll('.btn-edit-ev').forEach(btn => {
-                btn.addEventListener('click', () => openEditEvent(Number(btn.dataset.evid)));
-            });
-
-            // ── Scope dropdown → show/hide course picker ──────────────────────────
+            document.getElementById('formOverlay').addEventListener('click', e => { if(e.target.id==='formOverlay') closeModals(); });
+            document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModals();});
+            document.getElementById('btnNewEvent').addEventListener('click',()=>openNewEvent(selectedDate));
             const scopeEl = document.getElementById('fScope');
             if (scopeEl) {
                 scopeEl.addEventListener('change', () => toggleScopeFields(scopeEl.value));
@@ -899,105 +315,7 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
             document.getElementById('fStartDate').addEventListener('change', syncEndFromStart);
             document.getElementById('fStartTime').addEventListener('change', syncEndFromStart);
 
-            // ── Month / Week / Day view toggle ─────────────────────────────────
-            document.querySelectorAll('.cal-view-btn').forEach(btn => {
-                btn.addEventListener('click', () => switchView(btn.dataset.view));
-            });
-
-            // ── Day cell click → select (chip/add/more buttons stopPropagation,
-            //    so this only fires for clicks on empty cell space) ────────────
-            document.querySelectorAll('.cal-day:not(.cal-day--blank)').forEach(cell => {
-                cell.addEventListener('click', () => selectDay(cell.dataset.date));
-            });
-
-            // ── Mini calendar day click (adjacent-month <a> days just navigate) ─
-            document.querySelectorAll('button.cal-mini-day').forEach(btn => {
-                btn.addEventListener('click', () => selectDay(btn.dataset.date, {
-                    scroll: true
-                }));
-            });
-
-            // ── Filters card collapse ───────────────────────────────────────────
-            const filtersToggle = document.getElementById('filtersToggle');
-            if (filtersToggle) {
-                filtersToggle.addEventListener('click', () => {
-                    const card = document.getElementById('filtersCard');
-                    const collapsed = card.classList.toggle('collapsed');
-                    filtersToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-                });
-            }
-
-            // ── Upcoming Events card: "View all" expands the rest in place ──────
-            const upcomingViewAllBtn = document.getElementById('upcomingViewAllBtn');
-            if (upcomingViewAllBtn) {
-                upcomingViewAllBtn.addEventListener('click', () => {
-                    const expanded = upcomingViewAllBtn.classList.toggle('expanded');
-                    document.querySelectorAll('.cal-upcoming-card-row--extra').forEach(row => {
-                        row.style.display = expanded ? '' : 'none';
-                    });
-                    upcomingViewAllBtn.textContent = expanded ? 'Show less' : 'View all';
-                });
-            }
-
-            // Highlight today (or the mini-cal) as selected on first load
-            selectDay(selectedDate);
-
-        }); // end DOMContentLoaded
-
-        // ── Open event detail modal ────────────────────────────────────────────────
-        function openEventDetail(id) {
-            const ev = ALL_EVENTS.find(e => Number(e.id) === id);
-            if (!ev) return;
-            const color = TYPE_COLORS[ev.event_type] || '#64748b';
-
-            document.getElementById('detailTitle').textContent = ev.title;
-
-            const fmtDT = str => new Date(str.replace(' ', 'T')).toLocaleString('en-NG', {
-                weekday: 'short',
-                day: 'numeric',
-                month: 'short',
-                year: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit'
-            });
-
-            let body = `
-        <div class="detail-badge" style="background:${color}22;color:${color};border:1px solid ${color}55;">
-            ${ucFirst(ev.event_type.replace('_',' '))}
-            ${ev.scope !== 'personal' ? ' · ' + ev.scope : ''}
-        </div>
-        <div class="detail-row"><span class="detail-icon"><i class="bi bi-clock-fill"></i></span>
-            <span>${fmtDT(ev.start_datetime)} – ${fmtDT(ev.end_datetime)}</span>
-        </div>`;
-
-            if (ev.course_code) body += row('<i class="bi bi-book-half"></i>', ev.course_code);
-            if (ev.location) body += row('<i class="bi bi-geo-alt-fill"></i>', ev.location);
-            if (ev.description) body += row('<i class="bi bi-card-text"></i>', ev.description);
-            if (Number(ev.is_recurring)) {
-                const until = ev.recurrence_end_date ? ' until ' + ev.recurrence_end_date : ' (no end date)';
-                body += row('<i class="bi bi-arrow-repeat"></i>', 'Repeats: ' + ev.recurrence_rule + until);
-            }
-
-            document.getElementById('detailBody').innerHTML = body;
-
-            let footer = '';
-            if (IS_STAFF || Number(ev.created_by) === USER_ID) {
-                footer = `
-            <button class="btn secondary" id="detailEditBtn">Edit</button>
-            <form method="post" action="calendar_delete.php"
-                  onsubmit="return confirm('Delete this event?');" style="display:inline;">
-                <input type="hidden" name="event_id" value="${ev.id}">
-                <input type="hidden" name="redirect" value="<?php echo 'calendar.php?y=' . $year . '&amp;m=' . $month . ($filterCourseId ? '&amp;course=' . $filterCourseId : ''); ?>">
-                <button class="btn danger" type="submit">Delete</button>
-            </form>`;
-            }
-            document.getElementById('detailFooter').innerHTML = footer;
-
-            const editBtn = document.getElementById('detailEditBtn');
-            if (editBtn) editBtn.addEventListener('click', () => openEditEvent(id));
-
-            document.getElementById('detailOverlay').hidden = false;
-        }
+        });
 
         // ── Open new-event form ────────────────────────────────────────────────────
         function openNewEvent(dateStr) {
@@ -1029,8 +347,8 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
 
         // ── Open edit form ────────────────────────────────────────────────────────
         function openEditEvent(id) {
-            const ev = ALL_EVENTS.find(e => Number(e.id) === id);
-            if (!ev) return;
+            const ev = ALL_EVENTS.find(e => e._key === String(id) || Number(e.id) === id);
+            if (!ev || !ev._can_manage || ev.assignment_test_id) return;
             closeModals();
 
             document.getElementById('formTitle').textContent = 'Edit Event';
@@ -1041,8 +359,8 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
             document.getElementById('fDesc').value = ev.description || '';
             document.getElementById('fLocation').value = ev.location || '';
             // Populate date pickers
-            const startParts = ev.start_datetime.slice(0, 16).split(/[T ]/);
-            const endParts = ev.end_datetime.slice(0, 16).split(/[T ]/);
+            const startParts = (ev._series_start || ev.start_datetime).slice(0, 16).split(/[T ]/);
+            const endParts = (ev._series_end || ev.end_datetime).slice(0, 16).split(/[T ]/);
             document.getElementById('fStartDate').value = startParts[0];
             document.getElementById('fEndDate').value = endParts[0];
             // Set time inputs to the exact saved time (no rounding)
@@ -1076,126 +394,6 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
 
             document.getElementById('formOverlay').hidden = false;
             document.getElementById('fTitle').focus();
-        }
-
-        // ── Day-view modal ─────────────────────────────────────────────────────────
-        // Shared by the day-view modal AND the inline Day tab — builds the same
-        // agenda-row markup from ALL_EVENTS for a given date, honoring the
-        // sidebar's type-filter checkboxes.
-        function dayEventsHtml(dateStr, emptyMsg) {
-            const dt = new Date(dateStr + 'T00:00');
-            const dayEvs = ALL_EVENTS.filter(ev => ev.start_datetime.slice(0, 10) === dateStr);
-            let html = '';
-            dayEvs.forEach(ev => {
-                const color = TYPE_COLORS[ev.event_type] || '#64748b';
-                const timeStr = t => new Date(t.replace(' ', 'T')).toLocaleTimeString('en-NG', {
-                    hour: 'numeric',
-                    minute: '2-digit'
-                });
-                html += `
-            <div class="upcoming-item" style="border-left-color:${color};cursor:pointer;"
-                 onclick="openEventDetail(${ev.id})">
-                <div class="upcoming-date">
-                    <span class="udate-day">${dt.getDate()}</span>
-                    <span class="udate-mon">${dt.toLocaleString('en-NG',{month:'short'})}</span>
-                </div>
-                <div class="upcoming-info">
-                    <strong>${ev.title}</strong>
-                    <div class="muted">${timeStr(ev.start_datetime)} – ${timeStr(ev.end_datetime)}</div>
-                </div>
-                <span class="badge" style="background:${color}22;color:${color};">${ucFirst(ev.event_type)}</span>
-            </div>`;
-            });
-            return html || `<p class="muted" style="padding:12px 0">${emptyMsg}</p>`;
-        }
-
-        function openDayView(dateStr) {
-            const dt = new Date(dateStr + 'T00:00');
-            document.getElementById('dayTitle').textContent =
-                dt.toLocaleDateString('en-NG', {
-                    weekday: 'long',
-                    day: 'numeric',
-                    month: 'long',
-                    year: 'numeric'
-                });
-            document.getElementById('dayBody').innerHTML = dayEventsHtml(dateStr, 'No events on this day.');
-            document.getElementById('dayOverlay').hidden = false;
-        }
-
-        // ── Month / Week / Day tab switching ──────────────────────────────────────
-        function renderWeekTabView(dateStr) {
-            const base = new Date(dateStr + 'T00:00');
-            const sunday = new Date(base);
-            sunday.setDate(base.getDate() - base.getDay());
-            const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            let dowHtml = '';
-            let bodyHtml = '';
-            for (let i = 0; i < 7; i++) {
-                const d = new Date(sunday);
-                d.setDate(sunday.getDate() + i);
-                const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-                const isToday = ds === TODAY_STR;
-                dowHtml += `<div class="cal-dow">${dowNames[i]} <span class="cal-week-daynum${isToday ? ' cal-week-daynum--today' : ''}">${d.getDate()}</span></div>`;
-
-                const dayEvs = ALL_EVENTS.filter(ev => ev.start_datetime.slice(0, 10) === ds);
-                let chips = '';
-                dayEvs.forEach(ev => {
-                    const color = TYPE_COLORS[ev.event_type] || '#64748b';
-                    const timeStr = new Date(ev.start_datetime.replace(' ', 'T')).toLocaleTimeString('en-NG', {
-                        hour: 'numeric',
-                        minute: '2-digit'
-                    });
-                    chips += `<button class="cal-event-chip" style="border-left-color:${color};background:${color}18;" data-type="${ev.event_type}" onclick="openEventDetail(${ev.id})" title="${ev.title}">
-                        <span class="chip-dot" style="background:${color}"></span>
-                        <span class="chip-time">${timeStr}</span>
-                        <span class="chip-title">${ev.title}</span>
-                    </button>`;
-                });
-                bodyHtml += `<div class="cal-week-col${isToday ? ' cal-week-col--today' : ''}" data-date="${ds}">${chips}</div>`;
-            }
-            document.getElementById('weekDowRow').innerHTML = dowHtml;
-            document.getElementById('weekBody').innerHTML = bodyHtml;
-        }
-
-        function renderDayTabView(dateStr) {
-            const dt = new Date(dateStr + 'T00:00');
-            document.getElementById('dayViewHeader').innerHTML =
-                `<h2>${dt.toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</h2>`;
-            document.getElementById('dayViewBody').innerHTML = dayEventsHtml(dateStr, 'No events scheduled for this day.');
-        }
-
-        function switchView(view) {
-            document.querySelectorAll('.cal-view-btn').forEach(btn => {
-                const active = btn.dataset.view === view;
-                btn.classList.toggle('active', active);
-                btn.setAttribute('aria-selected', active ? 'true' : 'false');
-            });
-            document.getElementById('monthView').hidden = view !== 'month';
-            document.getElementById('weekView').hidden = view !== 'week';
-            document.getElementById('dayView').hidden = view !== 'day';
-            if (view === 'week') renderWeekTabView(selectedDate);
-            if (view === 'day') renderDayTabView(selectedDate);
-        }
-
-        // ── Day selection (main grid + mini calendar) ─────────────────────────────
-        function selectDay(dateStr, opts) {
-            opts = opts || {};
-            selectedDate = dateStr;
-            document.querySelectorAll('.cal-day--selected').forEach(el => el.classList.remove('cal-day--selected'));
-            const cell = document.querySelector(`.cal-day[data-date="${dateStr}"]`);
-            if (cell) {
-                cell.classList.add('cal-day--selected');
-                if (opts.scroll) cell.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center'
-                });
-            }
-            document.querySelectorAll('.cal-mini-day').forEach(el => {
-                el.classList.toggle('cal-mini-day--selected', el.dataset.date === dateStr);
-            });
-            const activeView = document.querySelector('.cal-view-btn.active')?.dataset.view || 'month';
-            if (activeView === 'week') renderWeekTabView(selectedDate);
-            if (activeView === 'day') renderDayTabView(selectedDate);
         }
 
         // ── Toggle helpers ─────────────────────────────────────────────────────────
@@ -1234,6 +432,7 @@ $upcomingForSidebar = upcoming_events_for($user, 20);
             return `<div class="detail-row"><span class="detail-icon">${icon}</span><span>${text}</span></div>`;
         }
     </script>
+    <script src="assets/calendar-views.js?v=<?php echo (int)filemtime(__DIR__.'/assets/calendar-views.js'); ?>" defer></script>
 </body>
 
 </html>

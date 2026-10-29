@@ -1,66 +1,70 @@
 <?php
 
-/**
- * push_subscribe.php
- * Stores or removes a user's push subscription endpoint.
- * Called via fetch() from the browser when user grants push permission.
- */
+declare(strict_types=1);
+
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/includes/pwa.php';
 
-header('Content-Type: application/json');
+header('Content-Type: application/json; charset=utf-8');
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
-if (!current_user()) {
-    http_response_code(401);
-    echo json_encode(['error' => 'Not logged in']);
-    exit();
+function push_json(int $status, array $payload): never
+{
+    http_response_code($status);
+    echo json_encode($payload, JSON_UNESCAPED_SLASHES);
+    exit;
 }
 
-$user   = current_user();
-$body   = json_decode(file_get_contents('php://input'), true) ?? [];
-$action = $body['action'] ?? 'subscribe'; // subscribe | unsubscribe
-
-if ($action === 'unsubscribe') {
-    try {
-        db()->prepare('DELETE FROM push_subscriptions WHERE user_id = ?')->execute([$user['id']]);
-        echo json_encode(['ok' => true]);
-    } catch (\Throwable $e) {
-        echo json_encode(['error' => $e->getMessage()]);
-    }
-    exit();
-}
-
-// subscribe
-$endpoint = trim($body['endpoint'] ?? '');
-$p256dh   = trim($body['keys']['p256dh'] ?? '');
-$auth     = trim($body['keys']['auth']   ?? '');
-
-if (!$endpoint) {
-    http_response_code(400);
-    echo json_encode(['error' => 'Missing endpoint']);
-    exit();
-}
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') push_json(405, ['error' => 'method_not_allowed']);
+$user = current_user();
+if (!$user) push_json(401, ['error' => 'authentication_required']);
+$csrf = is_string($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null) ? $_SERVER['HTTP_X_CSRF_TOKEN'] : null;
+if (!pwa_verify_csrf($csrf)) push_json(403, ['error' => 'invalid_request_token']);
 
 try {
-    // Create table if it doesn't exist yet
-    db()->exec('CREATE TABLE IF NOT EXISTS push_subscriptions (
-        id         INT AUTO_INCREMENT PRIMARY KEY,
-        user_id    INT NOT NULL,
-        endpoint   TEXT NOT NULL,
-        p256dh     VARCHAR(255) NULL,
-        auth_key   VARCHAR(255) NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT fk_push_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    $body = json_decode((string)file_get_contents('php://input'), true, 16, JSON_THROW_ON_ERROR);
+} catch (JsonException) {
+    push_json(400, ['error' => 'invalid_json']);
+}
+if (!is_array($body)) push_json(400, ['error' => 'invalid_request']);
+$action = (string)($body['action'] ?? 'subscribe');
 
-    // Upsert: one subscription per user (replace old one)
-    db()->prepare('
-        INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth_key)
-        VALUES (?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE endpoint=VALUES(endpoint), p256dh=VALUES(p256dh), auth_key=VALUES(auth_key)
-    ')->execute([$user['id'], $endpoint, $p256dh, $auth]);
+try {
+    if ($action === 'unsubscribe') {
+        $endpoint = trim((string)($body['endpoint'] ?? ''));
+        if ($endpoint !== '') {
+            db()->prepare('UPDATE web_push_subscriptions SET enabled=0,revoked_at=NOW() WHERE user_id=? AND endpoint_hash=?')
+                ->execute([(int)$user['id'], hash('sha256', $endpoint)]);
+        } else {
+            db()->prepare('UPDATE web_push_subscriptions SET enabled=0,revoked_at=NOW() WHERE user_id=?')
+                ->execute([(int)$user['id']]);
+        }
+        push_json(200, ['status' => 'ok']);
+    }
+    if ($action !== 'subscribe') push_json(400, ['error' => 'unsupported_action']);
 
-    echo json_encode(['ok' => true]);
-} catch (\Throwable $e) {
-    http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    $subscription = is_array($body['subscription'] ?? null) ? $body['subscription'] : [];
+    $keys = is_array($subscription['keys'] ?? null) ? $subscription['keys'] : [];
+    $endpoint = trim((string)($subscription['endpoint'] ?? ''));
+    $p256dh = trim((string)($keys['p256dh'] ?? ''));
+    $auth = trim((string)($keys['auth'] ?? ''));
+    $parts = parse_url($endpoint);
+    if ($endpoint === '' || strlen($endpoint) > 4096 || !is_array($parts)
+        || strtolower((string)($parts['scheme'] ?? '')) !== 'https' || empty($parts['host'])
+        || !preg_match('/^[A-Za-z0-9_-]{40,255}$/', $p256dh)
+        || !preg_match('/^[A-Za-z0-9_-]{16,255}$/', $auth)) {
+        push_json(422, ['error' => 'invalid_subscription']);
+    }
+    $encoding = trim((string)($subscription['contentEncoding'] ?? 'aes128gcm'));
+    if (!in_array($encoding, ['aes128gcm', 'aesgcm'], true)) $encoding = 'aes128gcm';
+    db()->prepare('INSERT INTO web_push_subscriptions
+        (user_id,endpoint_hash,endpoint,p256dh,auth_key,content_encoding,enabled,revoked_at)
+        VALUES (?,?,?,?,?,?,1,NULL)
+        ON DUPLICATE KEY UPDATE user_id=VALUES(user_id),endpoint=VALUES(endpoint),p256dh=VALUES(p256dh),
+            auth_key=VALUES(auth_key),content_encoding=VALUES(content_encoding),enabled=1,revoked_at=NULL,updated_at=NOW()')
+        ->execute([(int)$user['id'], hash('sha256', $endpoint), $endpoint, $p256dh, $auth, $encoding]);
+    push_json(200, ['status' => 'ok']);
+} catch (Throwable $e) {
+    error_log('[LCS Web Push] subscription update failed for user ' . (int)$user['id'] . ' (' . get_class($e) . ')');
+    push_json(503, ['error' => 'service_unavailable']);
 }

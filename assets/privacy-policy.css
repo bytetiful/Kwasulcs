@@ -1,0 +1,332 @@
+.privacy-page {
+    min-height: 100vh;
+    background: #f8fafc;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.privacy-skip-link {
+    position: fixed;
+    z-index: 10;
+    top: 12px;
+    left: 12px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 16px;
+    border-radius: 10px;
+    color: #ffffff;
+    background: var(--primary-dark);
+    font-weight: 750;
+    transform: translateY(-160%);
+}
+
+.privacy-skip-link:focus-visible {
+    transform: translateY(0);
+}
+
+.privacy-header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+}
+
+.privacy-header-inner,
+.privacy-main,
+.privacy-footer-inner {
+    width: min(920px, calc(100% - 48px));
+    margin-inline: auto;
+}
+
+.privacy-header-inner {
+    min-height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+}
+
+.privacy-brand {
+    display: inline-flex;
+    align-items: center;
+    min-height: 48px;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: var(--text);
+}
+
+.privacy-brand .brand-logo {
+    width: 34px;
+    height: 34px;
+    margin-right: 10px;
+}
+
+.privacy-back-link {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    color: var(--primary-dark);
+    font-size: 14px;
+    font-weight: 700;
+    background: var(--panel);
+}
+
+.privacy-back-link:hover {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 7%, var(--panel));
+}
+
+.privacy-main {
+    padding-block: 64px 80px;
+}
+
+.privacy-intro {
+    max-width: 780px;
+    margin-bottom: 48px;
+}
+
+.privacy-eyebrow {
+    margin: 0 0 14px;
+    color: var(--primary-dark);
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+}
+
+.privacy-intro h1 {
+    max-width: 820px;
+    margin: 0;
+    color: var(--text);
+    font-size: clamp(2rem, 5vw, 3.25rem);
+    line-height: 1.08;
+    letter-spacing: -.035em;
+    text-wrap: balance;
+}
+
+.privacy-intro-copy {
+    max-width: 700px;
+    margin: 20px 0 0;
+    color: var(--muted);
+    font-size: 17px;
+    line-height: 1.75;
+}
+
+.privacy-document {
+    padding: 56px clamp(24px, 6vw, 72px);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    box-shadow: var(--shadow-md);
+}
+
+.privacy-section + .privacy-section {
+    margin-top: 48px;
+    padding-top: 48px;
+    border-top: 1px solid var(--line);
+}
+
+.privacy-section h2 {
+    margin: 0 0 20px;
+    color: var(--text);
+    font-size: clamp(1.25rem, 3vw, 1.6rem);
+    line-height: 1.25;
+    letter-spacing: -.02em;
+}
+
+.privacy-section-number {
+    color: var(--primary-dark);
+}
+
+.privacy-section p,
+.privacy-section li,
+.privacy-contact-address {
+    color: #334155;
+    font-size: 16px;
+    line-height: 1.75;
+}
+
+.privacy-section p {
+    margin: 0 0 18px;
+}
+
+.privacy-section p:last-child {
+    margin-bottom: 0;
+}
+
+.privacy-section ul {
+    margin: 18px 0 22px;
+    padding-left: 24px;
+}
+
+.privacy-section li {
+    padding-left: 6px;
+    margin-block: 8px;
+}
+
+.privacy-section li::marker {
+    color: var(--primary-dark);
+}
+
+.privacy-contact {
+    margin: 24px 0;
+    padding: 24px;
+    border-left: 4px solid var(--primary);
+    border-radius: 0 14px 14px 0;
+    background: color-mix(in srgb, var(--primary) 7%, var(--panel));
+}
+
+.privacy-contact-address {
+    margin: 0;
+    font-style: normal;
+}
+
+.privacy-contact-address strong {
+    color: var(--text);
+}
+
+.privacy-email {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    margin-top: 12px;
+    color: var(--primary-dark);
+    font-weight: 750;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+}
+
+.privacy-contact-note {
+    margin-top: 12px !important;
+    color: var(--muted) !important;
+    font-size: 14px !important;
+}
+
+.privacy-footer {
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+}
+
+.privacy-footer-inner {
+    min-height: 96px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.privacy-footer-title {
+    display: block;
+    color: var(--text);
+    font-weight: 750;
+}
+
+.privacy-footer-policy {
+    color: var(--primary-dark);
+    font-weight: 750;
+}
+
+[data-theme="dark"] .privacy-page {
+    background: #0f172a;
+}
+
+[data-theme="dark"] .privacy-section p,
+[data-theme="dark"] .privacy-section li,
+[data-theme="dark"] .privacy-contact-address {
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .privacy-eyebrow,
+[data-theme="dark"] .privacy-section-number,
+[data-theme="dark"] .privacy-back-link,
+[data-theme="dark"] .privacy-email,
+[data-theme="dark"] .privacy-footer-policy,
+[data-theme="dark"] .privacy-section li::marker {
+    color: #86efac;
+}
+
+@media (max-width: 600px) {
+    .privacy-header-inner,
+    .privacy-main,
+    .privacy-footer-inner {
+        width: min(100% - 32px, 920px);
+    }
+
+    .privacy-header-inner {
+        min-height: 64px;
+        gap: 12px;
+    }
+
+    .privacy-brand {
+        font-size: 15px;
+    }
+
+    .privacy-brand .brand-logo {
+        width: 30px;
+        height: 30px;
+        margin-right: 8px;
+    }
+
+    .privacy-back-link {
+        padding-inline: 12px;
+    }
+
+    .privacy-main {
+        padding-block: 40px 56px;
+    }
+
+    .privacy-intro {
+        margin-bottom: 32px;
+    }
+
+    .privacy-intro-copy {
+        font-size: 16px;
+        line-height: 1.65;
+    }
+
+    .privacy-document {
+        padding: 32px 20px;
+        border-radius: 18px;
+    }
+
+    .privacy-section + .privacy-section {
+        margin-top: 36px;
+        padding-top: 36px;
+    }
+
+    .privacy-section p,
+    .privacy-section li,
+    .privacy-contact-address {
+        font-size: 15px;
+        line-height: 1.7;
+    }
+
+    .privacy-section ul {
+        padding-left: 20px;
+    }
+
+    .privacy-contact {
+        padding: 20px;
+    }
+
+    .privacy-footer-inner {
+        padding-block: 24px;
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 8px;
+    }
+}
+
+@media (max-width: 390px) {
+    .privacy-back-link span {
+        display: none;
+    }
+}

@@ -17,7 +17,7 @@ $__chatActiveId   = 0;
     <?php include __DIR__ . '/partials/appheader.php'; ?>
 
     <div class="chat-thread-header">
-        <a class="chat-icon-btn" href="chat.php" aria-label="Back to Chat" title="Back to Chat"><i class="bi bi-arrow-left"></i></a>
+        <a class="chat-icon-btn" href="chat" aria-label="Back to Assessment/Chat" title="Back to Assessment/Chat"><i class="bi bi-arrow-left"></i></a>
         <div class="chat-avatar chat-thread-avatar chat-avatar--ai"><i class="bi bi-robot"></i></div>
         <div class="chat-thread-info">
             <strong>AI Assistant</strong>

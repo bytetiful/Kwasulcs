@@ -22,9 +22,41 @@ if (!$course) {
     exit('Course not found');
 }
 
+// ── URL blocker (Phase 3B correction) ───────────────────────────────────────
+// Changing course.php?id=... must never let a user reach ANY course they
+// aren't authorized for, no matter how the id got there (direct URL edit,
+// stale link, etc.) — course_access_authorized() is the WEAK "may this user
+// even open this page" tier (department browsing for student/admin, or an
+// existing cross-department enrollment, or lecturer ownership), deliberately
+// NOT the same as registration. An unauthorized course is blocked exactly
+// like a nonexistent one (never distinguished — no existence leak).
+if (!course_access_authorized($courseId, $user)) {
+    http_response_code(404);
+    exit('Course not found');
+}
+
 $isStudent  = $user['role'] === 'student';
-$isStaff    = in_array($user['role'], ['admin', 'lecturer'], true);
-$registered = $isStudent ? is_enrolled((int) $user['id'], $courseId) : true;
+// Administrative UI (the New Announcement form, etc.) — department
+// authorization/ownership only, deliberately NOT conditioned on personal
+// registration (an admin's administrative authority over their own
+// department is unconditional; see course_access_authorized()'s docblock).
+$isStaff    = in_array($user['role'], ['admin', 'lecturer'], true) && course_access_authorized($courseId, $user);
+// "Registered" here specifically means "may use this course's AI-powered
+// student features (chatbot/quiz)" — real enrollment for students AND
+// admins alike (an admin's department authorization above does NOT imply
+// this), ownership for lecturers (never a "registration" concept for them).
+// Deliberately independent from course_access_authorized() above: a course
+// can be authorized-but-unregistered (materials visible, AI features not).
+$needsRegistration = in_array($user['role'], ['student', 'admin'], true);
+$registered = $needsRegistration ? is_enrolled((int) $user['id'], $courseId) : registered_or_staff_ai_access($courseId, $user);
+// Materials (documents/videos/resources) are available to any AUTHORIZED
+// user regardless of registration — the page-level gate above already
+// guarantees that, so this is always true for anyone who reaches this
+// point. Kept as its own named flag (rather than deleting the content
+// gates below) so the "Enrolled students only" UI stays intact as a
+// harmless defensive fallback rather than silently becoming dead code with
+// no explanation.
+$materialsAuthorized = true;
 
 // ── Topics ────────────────────────────────────────────────────────────────────
 $topicsStmt = db()->prepare('SELECT * FROM topics WHERE course_id = ? ORDER BY week_number ASC, id ASC');
@@ -140,6 +172,8 @@ function section_label(string $type): string
 {
     return $type === 'tutorial_update' ? 'Tutorial Update' : 'Exam Update';
 }
+require_once __DIR__ . '/includes/pwa.php';
+pwa_mark_cacheable_page((int)$user['id']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -155,6 +189,7 @@ function section_label(string $type): string
 
 <body class="app-body">
     <?php include __DIR__ . '/partials/nav.php'; ?>
+    <section class="app-hero">
     <?php include __DIR__ . '/partials/appheader.php'; ?>
     <header class="topbar">
         <div>
@@ -163,13 +198,14 @@ function section_label(string $type): string
             <p class="muted"><?php echo strtoupper(h($course['semester'])); ?> • Lecturer: <?php echo h($course['lecturer_name']); ?></p>
         </div>
         <div class="topbar-actions">
-            <?php if ($registered || $isStaff): ?>
+            <?php if ($registered): ?>
                 <a class="btn glass" href="quiz.php?course=<?php echo (int) $courseId; ?>"><i class="bi bi-bullseye icon"></i> Take Quiz</a>
             <?php endif; ?>
-            <a class="btn glass" href="calendar.php?course=<?php echo (int) $courseId; ?>"><i class="bi bi-calendar3 icon"></i> Course Calendar</a>
-            <a class="btn glass btn-go-dashboard" href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i> Go to Dashboard</a>
+            <a class="btn glass" href="calendar?course=<?php echo (int) $courseId; ?>"><i class="bi bi-calendar3 icon"></i> Course Calendar</a>
+            <a class="btn glass btn-go-dashboard" href="courses"><i class="bi bi-arrow-left" aria-hidden="true"></i> Back to Courses</a>
         </div>
     </header>
+    </section>
 
     <main class="page">
 
@@ -180,7 +216,7 @@ function section_label(string $type): string
             <div class="alert error">This course is not available for registration.</div>
         <?php endif; ?>
 
-        <?php if ($isStudent && !$registered): ?>
+        <?php if ($needsRegistration && !$registered): ?>
             <section class="hero-card course-cta">
                 <div>
                     <h2>Register for this course</h2>
@@ -315,7 +351,7 @@ function section_label(string $type): string
                                         <div class="week-col-head"><i class="bi bi-file-earmark-text-fill"></i> Documents (<?php echo count($topicDocs); ?>)</div>
                                         <?php if (!$topicDocs): ?>
                                             <p class="muted week-col-empty">No documents yet.</p>
-                                        <?php elseif (!($registered || $isStaff)): ?>
+                                        <?php elseif (!$materialsAuthorized): ?>
                                             <p class="muted week-col-empty"><i class="bi bi-lock-fill"></i> Enrolled students only</p>
                                         <?php else: ?>
                                             <?php foreach (array_slice($topicDocs, 0, 4) as $doc): ?>
@@ -335,7 +371,7 @@ function section_label(string $type): string
                                         <?php endif; ?>
                                     </div>
 
-                                    <?php if ($hasContent && ($registered || $isStaff)): ?>
+                                    <?php if ($hasContent && $registered): ?>
                                         <div class="week-col week-quiz-col">
                                             <div class="week-col-head"><i class="bi bi-award-fill"></i> Quiz</div>
                                             <div class="week-quiz-card">
@@ -348,7 +384,8 @@ function section_label(string $type): string
                                     <?php endif; ?>
                                 </div>
 
-                                <!-- Hidden document list for the "View all documents" modal (docs beyond the first 4 aren't otherwise in the DOM). -->
+                                <!-- Hidden document list for the "View all documents" modal (docs beyond the first 4 aren't otherwise in the DOM). Phase 3A fix: this backing list previously rendered real download.php links for EVERY document regardless of authorization — the CSS `hidden` attribute only hides it visually, the real URLs were still present in the HTML source ("frontend hiding" is not a security boundary). Gated behind $materialsAuthorized, same as the visible doc-list-row block above. -->
+                                <?php if ($materialsAuthorized): ?>
                                 <div class="week-all-docs" hidden>
                                     <?php foreach ($topicDocs as $doc): ?>
                                         <div class="doc-list-row">
@@ -362,6 +399,7 @@ function section_label(string $type): string
                                         </div>
                                     <?php endforeach; ?>
                                 </div>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -418,6 +456,7 @@ function section_label(string $type): string
 
                 <!-- ── Tutorial Videos tab ────────────────────────────────────────── -->
                 <div class="ann-tab-panel" data-panel="tutorials" hidden>
+                    <?php if ($isStaff): ?><a class="btn primary" href="admin.php?manage=<?php echo $courseId; ?>&amp;tab=sections#<?php echo $sections?'add-section-video':'add-section'; ?>"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Tutorial Video</a><?php endif; ?>
                     <?php if (!$tutorialVideos): ?>
                         <div class="course-empty-state">
                             <i class="bi bi-camera-reels"></i>
@@ -448,12 +487,13 @@ function section_label(string $type): string
 
                 <!-- ── Resources tab ──────────────────────────────────────────────── -->
                 <div class="ann-tab-panel" data-panel="resources" hidden>
+                    <?php if ($isStaff): ?><a class="btn primary" href="admin.php?manage=<?php echo $courseId; ?>&amp;tab=sections#<?php echo $sections?'add-section-document':'add-section'; ?>"><i class="bi bi-plus-lg" aria-hidden="true"></i> Add Resource</a><?php endif; ?>
                     <?php if (!$resourceDocs): ?>
                         <div class="course-empty-state">
                             <i class="bi bi-folder2-open"></i>
                             <p>No resources uploaded.</p>
                         </div>
-                    <?php elseif (!($registered || $isStaff)): ?>
+                    <?php elseif (!$materialsAuthorized): ?>
                         <div class="course-empty-state">
                             <i class="bi bi-lock-fill"></i>
                             <p>Enrolled students only.</p>
@@ -644,7 +684,7 @@ function section_label(string $type): string
                 const annViewAllBtn = document.querySelector('.view-all-ann-btn');
                 if (annViewAllBtn) {
                     annViewAllBtn.addEventListener('click', function() {
-                        window.location.href = 'notifications.php';
+                        window.location.href = 'notifications';
                     });
                 }
 

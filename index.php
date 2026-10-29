@@ -1,8 +1,15 @@
 <?php
 require_once __DIR__ . '/config.php';
 
+function login_destination(): string
+{
+    $destination = (string)($_SESSION['post_login_destination'] ?? '');
+    unset($_SESSION['post_login_destination']);
+    return preg_match('/^go\.php\?ref=[A-Za-z0-9._%-]+$/', $destination) ? $destination : 'dashboard';
+}
+
 if (current_user()) {
-    header('Location: dashboard.php');
+    header('Location: ' . login_destination());
     exit();
 }
 
@@ -69,7 +76,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!empty($_POST['remember'])) {
                 issue_remember_token((int)$user['id']);
             }
-            header('Location: dashboard.php');
+            header('Location: ' . login_destination());
             exit();
         } else {
             // Only a real, found account can be rate-limited this way —
@@ -109,9 +116,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 
 <body class="auth-body">
-    <div class="auth-theme-toggle">
-        <button class="theme-toggle" role="switch" onclick="toggleTheme()" title="Dark mode"></button>
-    </div>
     <div class="auth-shell">
         <div class="auth-shell-top">
             <div class="auth-panel auth-panel-left">
@@ -161,7 +165,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <input type="checkbox" name="remember">
                             Remember this device
                         </label>
-                        <a class="auth-forgot-link" href="forgot_password.php">Forgot Password?</a>
+                        <a class="auth-forgot-link" href="forgot_password">Forgot Password?</a>
                     </div>
 
                     <button type="submit" class="btn primary auth-submit-btn">
@@ -174,7 +178,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         </div>
         <div class="auth-shell-footer">
-            <span>© 2026 KWASU LCS</span>
+            <span>© <?php echo date('Y'); ?> KWASU LCS</span>
+            <a href="privacy-policy">Privacy Policy</a>
         </div>
     </div>
     <script>

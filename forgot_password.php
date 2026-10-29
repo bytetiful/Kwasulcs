@@ -2,7 +2,7 @@
 require_once __DIR__ . '/config.php';
 
 if (current_user()) {
-    header('Location: dashboard.php');
+    header('Location: dashboard');
     exit();
 }
 
@@ -16,9 +16,6 @@ $supportMailto = 'mailto:' . MAIL_FROM_EMAIL . '?subject=' . rawurlencode('KWASU
 </head>
 
 <body class="auth-body">
-    <div class="auth-theme-toggle">
-        <button class="theme-toggle" role="switch" onclick="toggleTheme()" title="Dark mode"></button>
-    </div>
     <div class="auth-shell auth-shell--narrow">
         <div class="auth-panel auth-panel-right auth-panel-right--solo">
 
@@ -290,7 +287,7 @@ $supportMailto = 'mailto:' . MAIL_FROM_EMAIL . '?subject=' . rawurlencode('KWASU
                 if (data.ok) {
                     goToStep(3);
                 } else if (data.restart) {
-                    location.href = 'forgot_password.php';
+                    location.href = 'forgot_password';
                 } else {
                     showError('step2Error', data.message);
                     document.getElementById('step2Support').hidden = false;
@@ -321,7 +318,7 @@ $supportMailto = 'mailto:' . MAIL_FROM_EMAIL . '?subject=' . rawurlencode('KWASU
                     goToStep(4);
                     sendCodeTransition(data.expires_in);
                 } else if (data.restart) {
-                    location.href = 'forgot_password.php';
+                    location.href = 'forgot_password';
                 } else {
                     showError('step3Error', data.message);
                 }
@@ -389,7 +386,7 @@ $supportMailto = 'mailto:' . MAIL_FROM_EMAIL . '?subject=' . rawurlencode('KWASU
                     clearInterval(countdownTimer);
                     goToStep(6);
                 } else if (data.restart) {
-                    location.href = 'forgot_password.php';
+                    location.href = 'forgot_password';
                 } else if (data.reason === 'locked') {
                     clearInterval(countdownTimer);
                     showError('step5Error', data.message);
@@ -413,7 +410,7 @@ $supportMailto = 'mailto:' . MAIL_FROM_EMAIL . '?subject=' . rawurlencode('KWASU
                     document.getElementById('codeInput').value = '';
                     startCountdown(data.expires_in);
                 } else if (data.restart) {
-                    location.href = 'forgot_password.php';
+                    location.href = 'forgot_password';
                 } else if (data.need_captcha) {
                     goToStep(3);
                 } else {
@@ -526,7 +523,7 @@ $supportMailto = 'mailto:' . MAIL_FROM_EMAIL . '?subject=' . rawurlencode('KWASU
                 if (data.ok) {
                     showStep('success');
                 } else if (data.restart) {
-                    location.href = 'forgot_password.php';
+                    location.href = 'forgot_password';
                 } else {
                     showError('step6Error', data.message);
                 }

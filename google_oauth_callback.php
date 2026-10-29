@@ -12,7 +12,7 @@ function google_oauth_fail(string $reason): void
 {
     error_log('[LCS] Google OAuth callback failed: ' . $reason . ' GET=' . json_encode($_GET));
     unset($_SESSION['google_oauth_state']);
-    header('Location: settings.php?google=error&reason=' . rawurlencode($reason));
+    header('Location: settings?google=error&reason=' . rawurlencode($reason));
     exit();
 }
 
@@ -75,5 +75,5 @@ if (empty($user['email'])) {
 db()->prepare('UPDATE users SET google_id = ?, google_picture = ?, google_connected_at = NOW() WHERE id = ?')
     ->execute([$googleId, $googlePicture, $user['id']]);
 
-header('Location: settings.php?google=connected');
+header('Location: settings?google=connected');
 exit();

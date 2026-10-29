@@ -1,0 +1,16 @@
+/* Dashboard-only composition: preserve the shared header's controls and menus. */
+.dashboard-hero { color:#fff; background:#00672f url('images/backgrounds/header-bg.png') center/cover no-repeat; }
+.dashboard-hero .app-header { justify-content:flex-end; background:transparent; border:0; padding:22px 30px 12px; }
+.dashboard-hero .app-header-actions { margin-left:auto; }
+.dashboard-hero .app-icon-btn { background:#ffffff16; color:#fff; }
+.dashboard-hero .app-profile-btn { color:#fff; }
+.dashboard-hero .app-profile-btn > .bi-chevron-down { color:#fff; font-size:14px; opacity:1; }
+.dashboard-hero .app-profile-btn:hover,.dashboard-hero .app-profile-btn[aria-expanded="true"] { background:#ffffff20; color:#fff; }
+.dashboard-hero .app-header-theme-toggle { background-color:#ffffff30; }
+.dashboard-welcome { display:flex; align-items:center; justify-content:space-between; gap:28px; padding:24px 34px 30px; }
+.dashboard-welcome-copy { min-width:0; }
+.dashboard-welcome h1 { font-size:clamp(26px,2.7vw,40px); line-height:1.2; margin:0 0 8px; color:#fff; overflow-wrap:anywhere; }
+.dashboard-role { font-size:21px; margin:0 0 4px; color:#fff; }
+.dashboard-description { font-size:14px; line-height:1.5; color:#e0efe7; margin:0; }
+@media(max-width:1100px) { .dashboard-welcome { flex-wrap:wrap; gap:14px; } }
+@media(max-width:768px) { .dashboard-hero .app-header { padding:14px 18px 4px; } .dashboard-welcome { padding:22px 20px 26px; } .dashboard-welcome h1 { font-size:26px; } .dashboard-role { font-size:18px; } .dashboard-description { font-size:13px; } }

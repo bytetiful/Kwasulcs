@@ -42,6 +42,11 @@ if ($type === 'group') {
         echo json_encode(['error' => 'This message was deleted.']);
         exit();
     }
+    if (!empty($msg['assignment_test_id']) || !empty($msg['online_quiz_id'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Generated Assignment/Test messages cannot be edited.']);
+        exit();
+    }
     db()->prepare('UPDATE chat_messages SET content = ?, edited_at = NOW() WHERE id = ?')
         ->execute([$content, $messageId]);
     $updated = db()->prepare('SELECT content, edited_at FROM chat_messages WHERE id = ?');
