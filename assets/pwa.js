@@ -8,6 +8,7 @@
   var connectivityBanner = null;
   var connectivityTimer = 0;
   var connectivityDelayTimer = 0;
+  var backOnlineHideTimer = 0;
   var poorConnectionTimer = 0;
   var poorConnectionCandidate = false;
   var poorConnectionActive = false;
@@ -73,6 +74,14 @@
 
   function setConnectivityState(kind, message, actionLabel, action, autoHide) {
     var banner = ensureConnectivityBanner();
+    // A quick ping completion after a refresh can report the neutral state.
+    // Do not let that race hide/reset the timed "Back online" notice.
+    if (!message && banner.classList.contains('is-online') && backOnlineHideTimer) return;
+    if (message && kind !== 'online') {
+      clearConnectivityDelay();
+      if (backOnlineHideTimer) window.clearTimeout(backOnlineHideTimer);
+      backOnlineHideTimer = 0;
+    }
     if (connectivityTimer) window.clearTimeout(connectivityTimer);
     connectivityTimer = 0;
     banner.className = 'pwa-connectivity-banner' + (kind ? ' is-' + kind : '');
@@ -111,11 +120,19 @@
 
   function showBackOnlineNotice() {
     clearConnectivityDelay();
+    if (backOnlineHideTimer) window.clearTimeout(backOnlineHideTimer);
+    backOnlineHideTimer = 0;
     connectivityDelayTimer = window.setTimeout(function () {
       connectivityDelayTimer = 0;
       setConnectivityState('online', 'Back online.', freshContentReady ? 'Refresh' : '',
-        freshContentReady ? function () { location.reload(); } : null,
-        SUCCESS_NOTICE_DURATION_MS);
+        freshContentReady ? function () { location.reload(); } : null);
+      backOnlineHideTimer = window.setTimeout(function () {
+        backOnlineHideTimer = 0;
+        var banner = ensureConnectivityBanner();
+        if (banner.classList.contains('is-online') && banner.textContent.includes('Back online.')) {
+          banner.hidden = true;
+        }
+      }, SUCCESS_NOTICE_DURATION_MS);
     }, SUCCESS_NOTICE_DELAY_MS);
   }
 
@@ -261,6 +278,10 @@
     fetch('pwa_ping.php?t=' + Date.now(), { cache: 'no-store', credentials: 'same-origin', signal: controller.signal })
       .then(function (response) {
         if (!response.ok) throw new Error('unreachable');
+        // A saved HTML snapshot cannot regain its stripped form tokens in
+        // place. Once the server responds, offer an explicit refresh so the
+        // user can safely return to the live, interactive page.
+        if (isSavedSnapshot) freshContentReady = true;
         var elapsed = performance.now() - startedAt;
         if (elapsed > 2000) {
           deferPoorConnectionNotice(isSavedSnapshot ? 'Poor internet connection — showing saved content.' : 'Poor internet connection. Some updates may take longer.');

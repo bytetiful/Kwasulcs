@@ -20,16 +20,23 @@ const assets = new Map([
   ['assets/img/kwasu_logo.png', 'image/png'],
 ]);
 function pageHtml(title) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><link rel="stylesheet" href="assets/pwa.css"></head><body><main><h1>${title}</h1><nav><a href="dashboard">Dashboard</a> <a href="courses">Courses</a> <a href="course?id=9">Course</a> <a href="calendar?view=week">Calendar</a></nav></main><script>window.LCSPWA={authenticated:true,userKey:'${userKey}',csrf:'',vapidPublicKey:'',unreadCount:0};</script><script src="assets/pwa.js" defer></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><link rel="stylesheet" href="assets/pwa.css"></head><body><main><h1>${title}</h1><form><button type="submit">Save event</button></form><nav><a href="dashboard">Dashboard</a> <a href="courses">Courses</a> <a href="course?id=9">Course</a> <a href="calendar?view=week">Calendar</a></nav></main><script>window.LCSPWA={authenticated:true,userKey:'${userKey}',csrf:'',vapidPublicKey:'',unreadCount:0};</script><script src="assets/pwa.js" defer></script></body></html>`;
 }
 
 (async () => {
   let courseDelay = 0;
   let courseTitle = 'Courses';
   let courseStatus = 200;
+  let mutationRequests = 0;
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
     const leaf = url.pathname.replace(/^\/LMS-portal\//, '');
+    if (request.method === 'POST' && ['ai_chat.php', 'calendar_save.php'].includes(leaf)) {
+      mutationRequests++;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end('{"status":"ok"}');
+      return;
+    }
     if (assets.has(leaf)) {
       response.writeHead(200, { 'Content-Type': assets.get(leaf) });
       response.end(fs.readFileSync(path.join(root, leaf)));
@@ -98,19 +105,16 @@ function pageHtml(title) {
     const cacheNavigationStarted = Date.now();
     await page.goto(base + 'courses', { waitUntil: 'domcontentloaded' });
     const cacheNavigationElapsed = Date.now() - cacheNavigationStarted;
-    check(await page.locator('h1').textContent() === 'Courses' && cacheNavigationElapsed < 550,
-      `real worker renders saved page before the 700ms network response (${cacheNavigationElapsed}ms)`);
-    let automaticNavigations = 0;
-    page.on('framenavigated', frame => { if (frame === page.mainFrame()) automaticNavigations++; });
-    const noticeStartedAt = Date.now();
-    await page.waitForFunction(() => document.querySelector('.pwa-connectivity-banner')?.textContent.includes('Back online.'));
-    check(Date.now() - noticeStartedAt >= 850, 'back-online notice waits about one second before appearing');
-    await page.waitForTimeout(1200);
-    check(automaticNavigations === 0 && await page.locator('h1').textContent() === 'Courses', 'real background refresh leaves the cached page open without automatic reload');
-    courseDelay = 0;
-    await page.locator('.pwa-connectivity-banner button').click();
-    await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'Courses updated');
-    check(await page.locator('meta[name="lcs-pwa-snapshot"]').count() === 0, 'manual Refresh loads the current live page');
+    check(await page.locator('h1').textContent() === 'Courses updated' && cacheNavigationElapsed >= 650,
+      `real worker waits for the fresh page instead of returning a snapshot (${cacheNavigationElapsed}ms)`);
+    check(await page.locator('meta[name="lcs-pwa-snapshot"]').count() === 0, 'a slow online page is not put into read-only snapshot mode');
+    check(!(await page.locator('form button').isDisabled()), 'forms remain enabled on a slow but online page');
+    const mutationStatuses = await page.evaluate(async () => {
+      const urls = ['ai_chat.php', 'calendar_save.php'];
+      return Promise.all(urls.map(url => fetch(url, { method: 'POST', body: '{}' }).then(response => response.status)));
+    });
+    check(mutationStatuses.every(status => status === 200) && mutationRequests === 2,
+      'AI requests and calendar event POSTs pass through the service worker to the server');
     await page.goto(base + 'calendar?view=week');
 
     await context.setOffline(true);
@@ -168,8 +172,8 @@ function pageHtml(title) {
     courseStatus = 401;
     courseTitle = 'Session expired';
     await page.goto(base + 'courses', { waitUntil: 'domcontentloaded' });
-    check(await page.locator('h1').textContent() === 'Courses updated', 'cached read-only page wins while a delayed session check runs');
     await page.waitForFunction(() => document.querySelector('h1')?.textContent === 'Session expired');
+    check(await page.locator('h1').textContent() === 'Session expired', 'online navigation does not briefly show cached private content before delayed session validation');
     check(!(await page.evaluate(async () => (await caches.keys()).some(name => name.startsWith('lcs-pages-') || name === 'lcs-private-context-v1'))),
       'delayed auth failure revalidates the visible page and clears all private state');
     check(errors.length === 0, 'real service-worker browser flow has no page errors: ' + errors.join(', '));

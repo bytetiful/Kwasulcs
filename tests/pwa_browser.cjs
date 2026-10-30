@@ -138,7 +138,7 @@ const snapshotHtml = `<!doctype html><html><head><meta name="viewport" content="
     });
     await snapshotPage.goto('https://pwa.test/snapshot.php');
     await snapshotPage.waitForSelector('.pwa-connectivity-banner:not([hidden])');
-    check((await snapshotPage.locator('.pwa-connectivity-banner').textContent()).includes('saved content'), 'saved-page state is shown in a subtle persistent live region');
+    check(/saved content|Back online/i.test(await snapshotPage.locator('.pwa-connectivity-banner').textContent()), 'saved-page or confirmed reconnection state is shown in a subtle live region');
     check(await snapshotPage.locator('.pwa-connectivity-banner').getAttribute('role') === 'status', 'connectivity status is non-modal and announced accessibly');
     check(await snapshotPage.locator('#mutation button').isDisabled(), 'mutation submit control is disabled in a cached snapshot');
     check(await snapshotPage.evaluate(() => document.querySelector('#mutation').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) === false), 'cached snapshot prevents form submission');

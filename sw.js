@@ -5,19 +5,16 @@
  */
 'use strict';
 
-const VERSION = '2026.10.29-2';
+const VERSION = '2026.10.29-3';
 const STATIC_CACHE = `lcs-static-${VERSION}`;
 const RETIRED_RESOURCE_PREFIX = 'lcs-offline-';
 const PAGE_CACHE_VERSION = '2026.09.27-2';
 const PAGE_PREFIX = `lcs-pages-${PAGE_CACHE_VERSION}-`;
 const CONTEXT_CACHE = 'lcs-private-context-v1';
-const PAGE_FRESH_MS = 5 * 60 * 1000;
 const PAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PAGE_MAX_ENTRIES = 24;
-// A cached read page should win quickly on weak networks. First visits get a
-// longer bounded attempt before the public offline fallback is shown.
-const CACHED_NAVIGATION_TIMEOUT_MS = 250;
-const FRESH_CACHED_NAVIGATION_TIMEOUT_MS = 150;
+// Keep online navigation authoritative for forms and session tokens; only
+// fall back to cached read-only HTML after this bounded network attempt fails.
 const UNCACHED_NAVIGATION_TIMEOUT_MS = 12000;
 const SCOPE_URL = new URL(self.registration.scope);
 const BASE_PATH = SCOPE_URL.pathname.endsWith('/') ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
@@ -324,10 +321,6 @@ async function postToClient(clientId, message) {
   } catch (_) { /* the tab may have closed */ }
 }
 
-function delay(ms, value) {
-  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
-}
-
 async function offlineNavigationResponse() {
   const cache = await caches.open(STATIC_CACHE);
   return (await cache.match(OFFLINE_URL)) || Response.error();
@@ -336,11 +329,12 @@ async function offlineNavigationResponse() {
 async function handleCacheableNavigation(event, cacheKey) {
   const cached = await readPageSnapshot(cacheKey);
   if (cached) {
-    const refresh = fetchAndUpdateNavigation(event.request, cacheKey);
-    const age = Date.now() - cached.cachedAt;
-    const timeout = age <= PAGE_FRESH_MS ? FRESH_CACHED_NAVIGATION_TIMEOUT_MS : CACHED_NAVIGATION_TIMEOUT_MS;
-    const winner = await Promise.race([refresh, delay(timeout, { timedOut: true })]);
-    if (winner.timedOut) {
+    // Only use a saved page immediately when the browser reports offline.
+    // Serving a snapshot during a merely slow online response marks the page
+    // read-only and strips its CSRF token, which can silently disable normal
+    // form, AI, chat-history, and calendar actions for the rest of the visit.
+    if (self.navigator && self.navigator.onLine === false) {
+      const refresh = fetchAndUpdateNavigation(event.request, cacheKey);
       event.waitUntil(refresh.then((result) => {
         const clientId = event.resultingClientId || event.clientId;
         if (result.authChanged) return postToClient(clientId, { type: 'PAGE_CACHE_AUTH_CHANGED', url: cacheKey });
@@ -348,8 +342,20 @@ async function handleCacheableNavigation(event, cacheKey) {
       }));
       return cached.response;
     }
-    if (winner.useCached) return cached.response;
-    return winner.response || cached.response;
+
+    // Online navigation is network-first. Keep the existing bounded wait,
+    // then fall back to the last authorized snapshot only if the request
+    // actually fails or stalls; never make a healthy but slow page read-only.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UNCACHED_NAVIGATION_TIMEOUT_MS);
+    try {
+      const request = new Request(event.request, { signal: controller.signal });
+      const result = await fetchAndUpdateNavigation(request, cacheKey);
+      if (result.useCached) return cached.response;
+      return result.response || cached.response;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   const controller = new AbortController();

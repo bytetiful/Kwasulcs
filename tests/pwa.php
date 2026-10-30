@@ -37,10 +37,10 @@ pwa_check(str_contains($head, '$__pwaNeedsCsrf') && str_contains($head, "lcs_cur
 
 $sw = pwa_text('sw.js');
 pwa_check((bool)preg_match("/const VERSION = '[^']+';/", $sw), 'service worker has explicit cache versioning');
-pwa_check(str_contains($sw, "const VERSION = '2026.10.29-2'"), 'static cache version installs the latest notification behavior and canonical navigation support');
+pwa_check(str_contains($sw, "const VERSION = '2026.10.29-3'"), 'static cache version installs network-first navigation and connectivity notices');
 pwa_check(str_contains($sw, "const PAGE_CACHE_VERSION = '2026.09.27-2'"), 'old course page snapshots with retired controls are invalidated');
-pwa_check(str_contains($sw, 'PAGE_CACHE_VERSION') && str_contains($sw, 'PAGE_FRESH_MS') && str_contains($sw, 'PAGE_MAX_AGE_MS') && str_contains($sw, 'PAGE_MAX_ENTRIES'), 'page cache version, freshness, age, and size are bounded constants');
-pwa_check(str_contains($sw, 'CACHED_NAVIGATION_TIMEOUT_MS = 250') && str_contains($sw, 'FRESH_CACHED_NAVIGATION_TIMEOUT_MS = 150') && str_contains($sw, 'UNCACHED_NAVIGATION_TIMEOUT_MS = 12000'), 'cached navigation waits 150/250ms while uncached timeout stays 12 seconds');
+pwa_check(str_contains($sw, 'PAGE_CACHE_VERSION') && str_contains($sw, 'PAGE_MAX_AGE_MS') && str_contains($sw, 'PAGE_MAX_ENTRIES'), 'page cache version, age, and size are bounded constants');
+pwa_check(str_contains($sw, 'UNCACHED_NAVIGATION_TIMEOUT_MS = 12000') && str_contains($sw, 'Only use a saved page immediately when the browser reports offline'), 'online navigation waits for a fresh server response before using read-only cache fallback');
 pwa_check(str_contains($sw, 'return result.response || offlineNavigationResponse()') && str_contains($sw, 'OFFLINE_URL'), 'failed approved navigation uses the public offline fallback');
 pwa_check(str_contains($sw, 'canonicalNavigationUrl') && str_contains($sw, "leaf === 'dashboard'") && str_contains($sw, "leaf === 'assignment_tests'"), 'authenticated page caching uses the same strict route and query allowlist');
 pwa_check(str_contains($sw, "leaf === 'chat' || leaf === 'notifications'") && str_contains($sw, "leaf === 'chat_group'") && str_contains($sw, "leaf === 'chat_dm'"), 'authorized chat and notification screens use the strict per-user page-cache allowlist');
@@ -54,7 +54,7 @@ pwa_check(str_contains($sw, "[401, 403].includes(response.status)") && str_conta
 pwa_check(str_contains($sw, "response.headers.get('X-LCS-PWA-Cache')") && str_contains($sw, "response.headers.get('X-LCS-PWA-User-Key')"), 'cache population requires server opt-in and matching opaque user scope');
 pwa_check(str_contains($sw, "headers.delete('Set-Cookie')") && str_contains($sw, 'sanitizeSnapshotHtml'), 'cached HTML strips cookie headers and reusable mutation tokens');
 pwa_check(str_contains($sw, 'CONTEXT_CACHE') && str_contains($sw, 'clearAllPrivateData') && str_contains($sw, 'setActiveUserKey'), 'opaque user scope survives worker restart and is cleared atomically');
-pwa_check(str_contains($sw, 'PAGE_CACHE_REFRESHED') && str_contains($sw, 'Promise.race'), 'slow-page fallback refreshes in the background and notifies the client when fresh');
+pwa_check(str_contains($sw, 'PAGE_CACHE_REFRESHED') && str_contains($sw, 'event.waitUntil(refresh.then'), 'offline snapshots refresh in the background and notify the client when fresh');
 pwa_check(str_contains($sw, 'online_quiz_take') && str_contains($sw, 'push_subscribe'), 'push destinations deny sensitive execution endpoints');
 pwa_check(str_contains($sw, "data.type === 'SKIP_WAITING'") && !str_contains($sw, "addEventListener('install', () => self.skipWaiting"), 'updates require explicit activation');
 

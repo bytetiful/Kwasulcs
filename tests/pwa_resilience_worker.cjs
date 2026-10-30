@@ -59,6 +59,7 @@ function htmlResponse(body, userKey = 'aaaaaaaaaaaaaaaaaaaaaaaa', status = 200, 
   const self = {
     registration: { scope: BASE, showNotification: async () => {} },
     location: { origin: ORIGIN },
+    navigator: { onLine: true },
     clients: {
       claim: async () => {},
       get: async () => ({ postMessage: message => clientMessages.push(message) }),
@@ -182,9 +183,9 @@ function htmlResponse(body, userKey = 'aaaaaaaaaaaaaaaaaaaaaaaa', status = 200, 
   fetchPlan = async () => new Promise(resolve => setTimeout(() => resolve(htmlResponse('<!doctype html><h1>Courses fresh</h1>', userA)), 600));
   const started = Date.now();
   run = await navigate('courses');
-  check((await run.response.text()).includes('Courses old') && Date.now() - started < 400, 'slow navigation returns fresh cached content near the 150ms timeout');
+  check((await run.response.text()).includes('Courses fresh') && Date.now() - started >= 550, 'online navigation waits for the fresh server page instead of serving a read-only snapshot');
   await run.done;
-  check(clientMessages.some(message => message.type === 'PAGE_CACHE_REFRESHED'), 'background refresh notifies the open client without forcing a reload');
+  check(!clientMessages.some(message => message.type === 'PAGE_CACHE_REFRESHED'), 'successful online navigation does not show a misleading background-refresh notice');
   saved = await pageCache.match(`${BASE}courses`);
   check((await saved.clone().text()).includes('Courses fresh'), 'successful background refresh replaces the snapshot');
   const oldHeaders = new Headers(saved.headers);
@@ -192,14 +193,14 @@ function htmlResponse(body, userKey = 'aaaaaaaaaaaaaaaaaaaaaaaa', status = 200, 
   await pageCache.put(`${BASE}courses`, new Response(await saved.text(), { headers: oldHeaders }));
   const oldStarted = Date.now();
   run = await navigate('courses');
-  check((await run.response.text()).includes('Courses fresh') && Date.now() - oldStarted < 450, 'older valid snapshot wins near the 250ms timeout');
+  check((await run.response.text()).includes('Courses fresh') && Date.now() - oldStarted < 1500, 'a quick online response remains responsive while using the latest server content');
   await run.done;
 
   fetchPlan = async () => new Promise(resolve => setTimeout(() => resolve(new Response('expired session', { status: 401 })), 400));
   run = await navigate('courses');
-  check(run.response.headers.get('X-LCS-PWA-Snapshot') === '1', 'short race may serve a read-only snapshot before delayed session validation');
+  check(run.response.status === 401, 'online navigation waits for delayed session validation instead of showing an authenticated snapshot');
   await run.done;
-  check(clientMessages.some(message => message.type === 'PAGE_CACHE_AUTH_CHANGED'), 'delayed server-confirmed session loss tells the client to revalidate');
+  check(!clientMessages.some(message => message.type === 'PAGE_CACHE_AUTH_CHANGED'), 'session validation is handled directly on the current navigation');
   check(!(await caches.keys()).some(name => name.startsWith('lcs-pages-') || name === 'lcs-private-context-v1'), 'delayed session loss clears private snapshots and context');
 
   fetchPlan = async () => { throw new Error('offline'); };
